@@ -21,8 +21,10 @@ type TelegramConfig struct {
 	BoundAt   time.Time `gorm:"column:bound_at"`
 	ModelID   string    `gorm:"column:model_id;default:''"` // AI model used for Telegram replies
 	Language  string    `gorm:"column:language;default:''"` // "zh" or "en"; empty = not chosen yet
-	BindCode       string `gorm:"column:bind_code;default:''"`        // One-time code required to bind via /start
-	NotifyEnabled  bool   `gorm:"column:notify_enabled;default:true"` // Push trade alerts to bound chat
+	BindCode          string  `gorm:"column:bind_code;default:''"`           // One-time code required to bind via /start
+	NotifyEnabled     bool    `gorm:"column:notify_enabled;default:true"`    // Push trade alerts to bound chat
+	DigestEnabled     bool    `gorm:"column:digest_enabled;default:true"`    // Daily snapshot + swing alerts
+	PnlSwingThreshold float64 `gorm:"column:pnl_swing_threshold;default:5"`  // uPnL move threshold (USD)
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -51,6 +53,10 @@ type TelegramConfigStore interface {
 	GetLanguage() string                              // Get UI language; returns "en" if not set
 	SetNotifyEnabled(enabled bool) error              // Enable/disable proactive trade alerts
 	IsNotifyEnabled() bool                            // Whether trade alerts are enabled (default true)
+	SetDigestEnabled(enabled bool) error
+	IsDigestEnabled() bool
+	GetPnlSwingThreshold() float64
+	SetPnlSwingThreshold(threshold float64) error
 }
 
 type telegramConfigStore struct {
@@ -64,7 +70,20 @@ func NewTelegramConfigStore(db *gorm.DB) TelegramConfigStore {
 }
 
 func (s *telegramConfigStore) initTables() error {
-	return s.db.AutoMigrate(&TelegramConfig{})
+	if err := s.db.AutoMigrate(&TelegramConfig{}); err != nil {
+		return err
+	}
+	// SQLite adds notify_enabled as 0 on existing rows; default alerts ON for bound chats once.
+	var migrated string
+	s.db.Raw("SELECT value FROM system_config WHERE key = ?", "telegram_notify_migrated").Scan(&migrated)
+	if migrated != "1" {
+		s.db.Exec("UPDATE telegram_configs SET notify_enabled = ? WHERE chat_id != 0", true)
+		s.db.Exec(`
+			INSERT INTO system_config (key, value) VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			"telegram_notify_migrated", "1")
+	}
+	return nil
 }
 
 func (s *telegramConfigStore) Get() (*TelegramConfig, error) {
@@ -234,4 +253,56 @@ func (s *telegramConfigStore) IsNotifyEnabled() bool {
 		return true
 	}
 	return cfg.NotifyEnabled
+}
+
+func (s *telegramConfigStore) SetDigestEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	result := s.db.First(&cfg, 1)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	cfg.ID = 1
+	cfg.DigestEnabled = enabled
+	return s.db.Save(&cfg).Error
+}
+
+func (s *telegramConfigStore) IsDigestEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var cfg TelegramConfig
+	if err := s.db.First(&cfg, 1).Error; err != nil {
+		return true
+	}
+	return cfg.DigestEnabled
+}
+
+func (s *telegramConfigStore) GetPnlSwingThreshold() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var cfg TelegramConfig
+	if err := s.db.First(&cfg, 1).Error; err != nil {
+		return 5.0
+	}
+	if cfg.PnlSwingThreshold <= 0 {
+		return 5.0
+	}
+	return cfg.PnlSwingThreshold
+}
+
+func (s *telegramConfigStore) SetPnlSwingThreshold(threshold float64) error {
+	if threshold <= 0 {
+		threshold = 5.0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	result := s.db.First(&cfg, 1)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	cfg.ID = 1
+	cfg.PnlSwingThreshold = threshold
+	return s.db.Save(&cfg).Error
 }

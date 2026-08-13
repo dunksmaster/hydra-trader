@@ -12,6 +12,7 @@ type TradeEvent struct {
 	RealizedPnL  float64
 	OrderID      string
 	PartialClose bool
+	Leverage     float64
 }
 
 var tradeHandler func(TradeEvent)

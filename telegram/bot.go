@@ -56,7 +56,8 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 	}
 	logger.Infof("Telegram bot @%s started", bot.Self.UserName)
 
-	InitNotifier(st, bot)
+	registerBotCommands(bot)
+	InitNotifier(st, bot, cfg.APIServerPort)
 
 	stopWatch := make(chan struct{})
 	go func() {
@@ -149,7 +150,7 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 			if lang := parseLangChoice(text); lang != "" {
 				awaitingLang = false
 				st.TelegramConfig().SetLanguage(lang) //nolint:errcheck
-				sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
+				sendStatusWithKeyboard(bot, chatID, st, botUserID, cfg.APIServerPort, lang)
 			} else {
 				sendMarkdownMsg(bot, chatID, langMenuMsg())
 			}
@@ -186,7 +187,7 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 				agents.Reset(chatID)
 			}
 			lang := st.TelegramConfig().GetLanguage()
-			sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
+			sendStatusWithKeyboard(bot, chatID, st, botUserID, cfg.APIServerPort, lang)
 			continue
 		}
 
@@ -236,6 +237,22 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 			continue
 		}
 		if text == "" {
+			continue
+		}
+
+		// ── Plain-text shortcuts (same as /positions, /balanca, etc.) ────────
+		if intent := matchNLQuickIntent(text); intent != "" {
+			// #region agent log
+			dbgLog("H6", "bot.go:dispatch", "nl_quick_intent", map[string]any{
+				"text": text, "intent": intent, "chatID": chatID,
+			})
+			// #endregion
+			resolveBotUser()
+			if botUserID == "" {
+				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
+				continue
+			}
+			handleQuickCommand(bot, chatID, "/"+intent, st, botUserID, cfg.APIServerPort)
 			continue
 		}
 
@@ -320,8 +337,77 @@ func sendMarkdownMsg(bot *tgbotapi.BotAPI, chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "Markdown"
 	if _, err := bot.Send(msg); err != nil {
+		// #region agent log
+		dbgLog("H7", "bot.go:sendMarkdownMsg", "markdown_send_failed", map[string]any{
+			"chatID": chatID, "err": err.Error(),
+		})
+		// #endregion
 		plain := tgbotapi.NewMessage(chatID, text)
+		if _, err2 := bot.Send(plain); err2 != nil {
+			dbgLog("H7", "bot.go:sendMarkdownMsg", "plain_send_failed", map[string]any{
+				"chatID": chatID, "err": err2.Error(),
+			})
+		}
+	}
+}
+
+func queryKeyboard(lang string) tgbotapi.ReplyKeyboardMarkup {
+	if lang == "zh" {
+		return tgbotapi.ReplyKeyboardMarkup{
+			Keyboard: [][]tgbotapi.KeyboardButton{
+				{{Text: "查看持仓"}, {Text: "查看余额"}},
+				{{Text: "我的交易员"}},
+			},
+			ResizeKeyboard: true,
+		}
+	}
+	return tgbotapi.ReplyKeyboardMarkup{
+		Keyboard: [][]tgbotapi.KeyboardButton{
+			{{Text: "Show my positions"}, {Text: "Show my balance"}},
+			{{Text: "List my traders"}},
+		},
+		ResizeKeyboard: true,
+	}
+}
+
+func sendStatusWithKeyboard(bot *tgbotapi.BotAPI, chatID int64, st *store.Store, userID string, apiPort int, lang string) {
+	msg := tgbotapi.NewMessage(chatID, statusMsg(st, userID, apiPort, lang))
+	msg.ParseMode = "Markdown"
+	msg.ReplyMarkup = queryKeyboard(lang)
+	if _, err := bot.Send(msg); err != nil {
+		plain := tgbotapi.NewMessage(chatID, statusMsg(st, userID, apiPort, lang))
+		plain.ReplyMarkup = queryKeyboard(lang)
 		bot.Send(plain) //nolint:errcheck
+	}
+}
+
+func sendHTMLMsg(bot *tgbotapi.BotAPI, chatID int64, html string) {
+	msg := tgbotapi.NewMessage(chatID, html)
+	msg.ParseMode = "HTML"
+	if _, err := bot.Send(msg); err != nil {
+		plain := tgbotapi.NewMessage(chatID, stripHTML(html))
+		bot.Send(plain) //nolint:errcheck
+	}
+}
+
+func stripHTML(s string) string {
+	s = strings.ReplaceAll(s, "<b>", "")
+	s = strings.ReplaceAll(s, "</b>", "")
+	s = strings.ReplaceAll(s, "<i>", "")
+	s = strings.ReplaceAll(s, "</i>", "")
+	return s
+}
+
+func registerBotCommands(bot *tgbotapi.BotAPI) {
+	cmds := []tgbotapi.BotCommand{
+		{Command: "balanca", Description: "Portfolio & balance"},
+		{Command: "positions", Description: "Open positions detail"},
+		{Command: "notify", Description: "Alerts on/off/test"},
+		{Command: "help", Description: "All commands"},
+	}
+	cfg := tgbotapi.NewSetMyCommands(cmds...)
+	if _, err := bot.Request(cfg); err != nil {
+		logger.Warnf("Telegram: failed to set bot commands: %v", err)
 	}
 }
 
@@ -547,7 +633,10 @@ func helpMsg(lang string) string {
 /balanca — balance
 /positions — open positions
 /traders — list traders
-/notify — auto alerts on/off (try /notify test)
+/notify — alerts, test, daily, swing
+/notify test — rich portfolio test
+/notify daily off — disable daily snapshot
+/notify swing 5 — uPnL alert threshold
 /start — refresh status
 /lang  — change language
 /help  — show this`
@@ -572,7 +661,10 @@ func helpMsg(lang string) string {
 /balanca — balance
 /positions — open positions
 /traders — list traders
-/notify — auto alerts on/off (try /notify test)
+/notify — alerts, test, daily, swing
+/notify test — rich portfolio test
+/notify daily off — disable daily snapshot
+/notify swing 5 — uPnL alert threshold
 /start — refresh status
 /lang  — change language
 /help  — show this`

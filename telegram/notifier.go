@@ -2,9 +2,9 @@ package telegram
 
 import (
 	"fmt"
-	"math"
 	"nofx/events"
 	"nofx/store"
+	"nofx/telegram/agent"
 	"strings"
 	"sync"
 	"time"
@@ -17,26 +17,30 @@ type dedupeEntry struct {
 }
 
 var (
-	notifierMu     sync.Mutex
-	notifierStore  *store.Store
-	notifierBot    *tgbotapi.BotAPI
-	notifierDedupe sync.Map
+	notifierMu      sync.Mutex
+	notifierStore   *store.Store
+	notifierBot     *tgbotapi.BotAPI
+	notifierAPIPort int
+	notifierDedupe  sync.Map
 )
 
-// InitNotifier wires proactive trade alerts to the bound Telegram chat.
-func InitNotifier(st *store.Store, bot *tgbotapi.BotAPI) {
+// InitNotifier wires proactive trade alerts and digest watcher to the bound Telegram chat.
+func InitNotifier(st *store.Store, bot *tgbotapi.BotAPI, apiPort int) {
 	notifierMu.Lock()
 	notifierStore = st
 	notifierBot = bot
+	notifierAPIPort = apiPort
 	notifierMu.Unlock()
 
 	events.OnTrade(handleTradeEvent)
+	StartDigest(st, bot, apiPort)
 }
 
 func handleTradeEvent(e events.TradeEvent) {
 	notifierMu.Lock()
 	st := notifierStore
 	bot := notifierBot
+	apiPort := notifierAPIPort
 	notifierMu.Unlock()
 	if st == nil || bot == nil {
 		return
@@ -61,53 +65,16 @@ func handleTradeEvent(e events.TradeEvent) {
 		notifierDedupe.Store(key, dedupeEntry{at: time.Now()})
 	}
 
-	text := formatTradeAlert(st, e)
-	sendMarkdownMsg(bot, chatID, text)
-}
-
-func formatTradeAlert(st *store.Store, e events.TradeEvent) string {
-	traderName := lookupTraderName(st, e.TraderID)
-	symbol := strings.TrimSuffix(strings.ToUpper(e.Symbol), "USDT")
-	if symbol == "" {
-		symbol = e.Symbol
-	}
-
-	actionLabel := tradeActionLabel(e)
-	qty := formatQty(e.Quantity)
-	price := formatPrice(e.Price)
-
-	lines := []string{actionLabel, fmt.Sprintf("%s %s · %s @ %s", e.Side, symbol, qty, price)}
-	if traderName != "" {
-		lines = append(lines, fmt.Sprintf("_Trader:_ %s", traderName))
-	}
-	if e.PartialClose {
-		lines[0] = "📉 *Partial close*"
-	}
-	if strings.HasPrefix(e.Action, "close_") && !e.PartialClose {
-		pnl := e.RealizedPnL
-		sign := "+"
-		if pnl < 0 {
-			sign = ""
+	lang := st.TelegramConfig().GetLanguage()
+	var footer *AccountSnapshot
+	if strings.HasPrefix(e.Action, "close_") {
+		if snap, err := fetchLiveAccountSnapshot(st, apiPort); err == nil {
+			footer = &snap
 		}
-		lines = append(lines, fmt.Sprintf("*PnL:* %s$%.2f", sign, pnl))
 	}
-	return strings.Join(lines, "\n")
-}
 
-func tradeActionLabel(e events.TradeEvent) string {
-	switch e.Action {
-	case "open_long":
-		return "📈 *Position opened* (LONG)"
-	case "open_short":
-		return "📉 *Position opened* (SHORT)"
-	case "close_long", "close_short":
-		return "✅ *Position closed*"
-	default:
-		if strings.HasPrefix(e.Action, "open_") {
-			return "📈 *Position opened*"
-		}
-		return "✅ *Trade update*"
-	}
+	text := formatTradeAlertRich(st, e, lang, footer)
+	sendHTMLMsg(bot, chatID, text)
 }
 
 func lookupTraderName(st *store.Store, traderID string) string {
@@ -129,32 +96,27 @@ func lookupTraderName(st *store.Store, traderID string) string {
 	return traderID
 }
 
-func formatQty(q float64) string {
-	if q == 0 {
-		return "0"
+func fetchLiveAccountSnapshot(st *store.Store, apiPort int) (AccountSnapshot, error) {
+	userID, err := resolveBotUserID(st)
+	if err != nil {
+		return AccountSnapshot{}, err
 	}
-	if q >= 1 {
-		return fmt.Sprintf("%.4f", q)
+	jwt, err := agent.GenerateBotToken(userID)
+	if err != nil {
+		return AccountSnapshot{}, err
 	}
-	return fmt.Sprintf("%.6f", q)
+	client := newQuickClient(apiPort, jwt)
+	return fetchAccountSnapshot(client)
 }
 
-func formatPrice(p float64) string {
-	if p == 0 {
-		return "$0"
+func resolveBotUserID(st *store.Store) (string, error) {
+	users, err := st.User().GetAll()
+	if err == nil && len(users) > 0 {
+		return users[0].ID, nil
 	}
-	if p >= 100 {
-		return fmt.Sprintf("$%.2f", p)
+	traders, err := st.Trader().ListAll()
+	if err == nil && len(traders) > 0 && traders[0].UserID != "" {
+		return traders[0].UserID, nil
 	}
-	if p >= 1 {
-		return fmt.Sprintf("$%.4f", p)
-	}
-	decimals := int(math.Ceil(-math.Log10(p))) + 2
-	if decimals < 2 {
-		decimals = 2
-	}
-	if decimals > 8 {
-		decimals = 8
-	}
-	return fmt.Sprintf("$%.*f", decimals, p)
+	return "", fmt.Errorf("no user found")
 }

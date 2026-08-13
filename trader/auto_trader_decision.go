@@ -3,6 +3,7 @@ package trader
 import (
 	"fmt"
 	"math"
+	"nofx/events"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
@@ -399,6 +400,17 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 			logger.Infof("  ⚠️ Failed to record position: %v", err)
 		} else {
 			logger.Infof("  📊 Position recorded [%s] %s %s @ %.4f", at.id[:8], symbol, side, price)
+			events.EmitTrade(events.TradeEvent{
+				TraderID:     at.id,
+				ExchangeType: at.exchange,
+				Symbol:       symbol,
+				Side:         side,
+				Action:       action,
+				Quantity:     quantity,
+				Price:        price,
+				OrderID:      orderID,
+				Leverage:     float64(leverage),
+			})
 		}
 
 	case "close_long", "close_short":

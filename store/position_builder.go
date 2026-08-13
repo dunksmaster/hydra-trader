@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"math"
+	"nofx/events"
 	"nofx/logger"
 	"strings"
 	"time"
@@ -33,11 +34,40 @@ func (pb *PositionBuilder) ProcessTrade(
 	orderID string,
 ) error {
 	if strings.HasPrefix(action, "open_") {
-		return pb.handleOpen(traderID, exchangeID, exchangeType, symbol, side, quantity, price, fee, tradeTimeMs, orderID)
+		err := pb.handleOpen(traderID, exchangeID, exchangeType, symbol, side, quantity, price, fee, tradeTimeMs, orderID)
+		if err == nil {
+			pb.emitTrade(traderID, exchangeType, symbol, side, action, quantity, price, 0, orderID, 1, false)
+		}
+		return err
 	} else if strings.HasPrefix(action, "close_") {
-		return pb.handleClose(traderID, exchangeID, exchangeType, symbol, side, quantity, price, fee, realizedPnL, tradeTimeMs, orderID)
+		partial, err := pb.handleClose(traderID, exchangeID, exchangeType, symbol, side, quantity, price, fee, realizedPnL, tradeTimeMs, orderID)
+		if err == nil && partial != nil {
+			pb.emitTrade(traderID, exchangeType, symbol, side, action, quantity, price, partial.realizedPnL, orderID, 0, partial.partial)
+		}
+		return err
 	}
 	return nil
+}
+
+type closeResult struct {
+	partial     bool
+	realizedPnL float64
+}
+
+func (pb *PositionBuilder) emitTrade(traderID, exchangeType, symbol, side, action string, quantity, price, realizedPnL float64, orderID string, leverage float64, partialClose bool) {
+	events.EmitTrade(events.TradeEvent{
+		TraderID:     traderID,
+		ExchangeType: exchangeType,
+		Symbol:       symbol,
+		Side:         side,
+		Action:       action,
+		Quantity:     quantity,
+		Price:        price,
+		RealizedPnL:  realizedPnL,
+		OrderID:      orderID,
+		Leverage:     leverage,
+		PartialClose: partialClose,
+	})
 }
 
 // handleOpen handles opening positions (create new or average into existing)
@@ -99,18 +129,18 @@ func (pb *PositionBuilder) handleClose(
 	quantity, price, fee, realizedPnL float64,
 	tradeTimeMs int64,
 	orderID string,
-) error {
+) (*closeResult, error) {
 	// Get OPEN position
 	position, err := pb.positionStore.GetOpenPositionBySymbol(traderID, symbol, side)
 	if err != nil {
-		return fmt.Errorf("failed to get open position: %w", err)
+		return nil, fmt.Errorf("failed to get open position: %w", err)
 	}
 
 	if position == nil {
 		// No open position found - just skip
 		// This can happen if trades are processed out of order or database was cleared
 		logger.Infof("  ⚠️  No matching open position for %s %s (orderID: %s), skipping", symbol, side, orderID)
-		return nil
+		return nil, nil
 	}
 
 	const QUANTITY_TOLERANCE = 0.0001
@@ -130,7 +160,10 @@ func (pb *PositionBuilder) handleClose(
 		// Partial close: reduce quantity and update weighted average exit price
 		logger.Infof("  📉 Partial close: %s %s %.6f → %.6f (closed %.6f @ %.2f, PnL: %.2f)",
 			symbol, side, position.Quantity, position.Quantity-quantity, quantity, price, realizedPnL)
-		return pb.positionStore.ReducePositionQuantity(position.ID, quantity, price, fee, realizedPnL)
+		if err := pb.positionStore.ReducePositionQuantity(position.ID, quantity, price, fee, realizedPnL); err != nil {
+			return nil, err
+		}
+		return &closeResult{partial: true, realizedPnL: realizedPnL}, nil
 	} else {
 		// Full close (or close with tolerance): mark as CLOSED
 		closeQty := quantity
@@ -162,7 +195,7 @@ func (pb *PositionBuilder) handleClose(
 		logger.Infof("  ✅ Full close: %s %s %.6f @ %.2f (avg exit: %.2f, entry: %.2f, PnL: %.2f)",
 			symbol, side, closeQty, price, finalExitPrice, position.EntryPrice, totalPnL)
 
-		return pb.positionStore.ClosePositionFully(
+		if err := pb.positionStore.ClosePositionFully(
 			position.ID,
 			finalExitPrice,
 			orderID,
@@ -170,7 +203,10 @@ func (pb *PositionBuilder) handleClose(
 			totalPnL,
 			totalFee,
 			"sync",
-		)
+		); err != nil {
+			return nil, err
+		}
+		return &closeResult{partial: false, realizedPnL: totalPnL}, nil
 	}
 }
 
