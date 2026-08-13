@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import useSWR from 'swr'
 import { api } from '../../lib/api'
+import type { AICostDashboard } from '../../lib/api/ai-costs'
 import { ApiError } from '../../lib/httpClient'
 import { ROUTES } from '../../router/paths'
 import type {
@@ -187,6 +188,36 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     const totalCount = usingTraders.length
     return { runningCount, totalCount, usingTraders }
   }
+
+  const claw402Models =
+    configuredModels.filter((m) => m.provider === 'claw402') || []
+
+  const { data: modelSpendByModelId } = useSWR<
+    Record<string, AICostDashboard>
+  >(
+    user && token && traders && claw402Models.length > 0
+      ? [
+          'model-ai-spend',
+          claw402Models.map((m) => m.id).join(','),
+          traders.map((t) => `${t.trader_id}:${t.ai_model}`).join('|'),
+        ]
+      : null,
+    async () => {
+      const out: Record<string, AICostDashboard> = {}
+      await Promise.all(
+        claw402Models.map(async (model) => {
+          const traderIds =
+            traders
+              ?.filter((tr) => tr.ai_model === model.id)
+              .map((tr) => tr.trader_id) || []
+          if (traderIds.length === 0) return
+          out[model.id] = await api.getDashboardForTraders(traderIds, true)
+        })
+      )
+      return out
+    },
+    { refreshInterval: 60000, shouldRetryOnError: false }
+  )
 
   const isModelUsedByAnyTrader = (modelId: string) => {
     return traders?.some((tr) => tr.ai_model === modelId) || false
@@ -792,6 +823,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         <ConfigStatusGrid
           configuredModels={configuredModels}
           configuredExchanges={configuredExchanges}
+          modelSpendByModelId={modelSpendByModelId}
           exchangeAccountStates={exchangeAccountStates}
           isExchangeAccountStatesLoading={isExchangeAccountStatesLoading}
           visibleExchangeAddresses={visibleExchangeAddresses}

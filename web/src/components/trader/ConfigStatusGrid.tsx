@@ -16,15 +16,23 @@ import {
   AI_PROVIDER_CONFIG,
   truncateAddress,
 } from './model-constants'
+import type { AICostDashboard } from '../../lib/api/ai-costs'
 
 interface UsageInfo {
   runningCount: number
   totalCount: number
 }
 
+function fmtSpendUsd(n: number | undefined): string {
+  if (n == null || Number.isNaN(n)) return '—'
+  if (Math.abs(n) < 0.01 && n !== 0) return `$${n.toFixed(4)}`
+  return `$${n.toFixed(2)}`
+}
+
 interface ConfigStatusGridProps {
   configuredModels: AIModel[]
   configuredExchanges: Exchange[]
+  modelSpendByModelId?: Record<string, AICostDashboard>
   exchangeAccountStates?: Record<string, ExchangeAccountState>
   isExchangeAccountStatesLoading?: boolean
   visibleExchangeAddresses: Set<string>
@@ -41,6 +49,7 @@ interface ConfigStatusGridProps {
 export function ConfigStatusGrid({
   configuredModels,
   configuredExchanges,
+  modelSpendByModelId,
   exchangeAccountStates,
   isExchangeAccountStatesLoading,
   visibleExchangeAddresses,
@@ -109,6 +118,10 @@ export function ConfigStatusGrid({
         <div className="p-4 space-y-3">
           {configuredModels.map((model) => {
             const usageInfo = getModelUsageInfo(model.id)
+            const spend =
+              model.provider === 'claw402'
+                ? modelSpendByModelId?.[model.id]
+                : undefined
             return (
               <div
                 key={model.id}
@@ -151,6 +164,35 @@ export function ConfigStatusGrid({
                             {truncateAddress(model.walletAddress)}
                           </span>
                         ) : null}
+                      </div>
+                    ) : null}
+                    {spend ? (
+                      <div
+                        className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono text-nofx-text-muted"
+                        title={
+                          usageInfo.totalCount > 1
+                            ? 'Combined Claw402 spend across all traders using this model'
+                            : undefined
+                        }
+                      >
+                        <span>
+                          {language === 'zh' ? '今日' : 'Today'}{' '}
+                          <span className="text-nofx-text">
+                            {fmtSpendUsd(spend.spent_today)}
+                          </span>
+                        </span>
+                        <span>
+                          {language === 'zh' ? '7天' : '7d'}{' '}
+                          <span className="text-nofx-text">
+                            {fmtSpendUsd(spend.spent_week)}
+                          </span>
+                        </span>
+                        <span>
+                          {language === 'zh' ? '日均' : 'Burn'}{' '}
+                          <span className="text-nofx-text">
+                            {fmtSpendUsd(spend.estimated_daily)}
+                          </span>
+                        </span>
                       </div>
                     ) : null}
                   </div>
