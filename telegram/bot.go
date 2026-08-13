@@ -29,15 +29,11 @@ func Start(cfg *config.Config, st *store.Store, reloadCh <-chan struct{}) {
 			continue
 		}
 
-		stopped := runBot(token, cfg, st)
+		stopped := runBot(token, cfg, st, reloadCh)
 		if !stopped {
 			return
 		}
-
-		select {
-		case <-reloadCh:
-			logger.Info("Reloading Telegram bot with new token...")
-		}
+		logger.Info("Reloading Telegram bot with latest token...")
 	}
 }
 
@@ -50,19 +46,35 @@ func resolveToken(cfg *config.Config, st *store.Store) string {
 	return ""
 }
 
-// runBot runs the bot until the updates channel closes (clean stop → true) or a fatal error (false).
-func runBot(token string, cfg *config.Config, st *store.Store) bool {
+// runBot runs the bot until a reload is requested, the updates channel closes, or a fatal error.
+func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan struct{}) bool {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		logger.Errorf("Telegram bot failed to start: %v", err)
-		return false
+		<-reloadCh
+		return true
 	}
 	logger.Infof("Telegram bot @%s started", bot.Self.UserName)
 
-	// Allowed chat ID: read from DB binding (0 = unbound, first /start will bind).
+	InitNotifier(st, bot)
+
+	stopWatch := make(chan struct{})
+	go func() {
+		select {
+		case <-reloadCh:
+			logger.Info("Reload signal received, stopping current Telegram bot...")
+			bot.StopReceivingUpdates()
+		case <-stopWatch:
+		}
+	}()
+	defer close(stopWatch)
+
+	// Allowed chat ID: read from DB binding (0 = unbound; /start requires dashboard bind code).
 	allowedChatID := int64(0)
 	if id, err := st.TelegramConfig().GetBoundChatID(); err == nil && id != 0 {
 		allowedChatID = id
+	} else if _, err := st.TelegramConfig().EnsureBindCode(); err != nil {
+		logger.Warnf("Telegram: failed to ensure bind code: %v", err)
 	}
 
 	// botUserID / botToken / agents are resolved lazily and refresh when user registers.
@@ -75,10 +87,24 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 
 	resolveBotUser := func() bool {
 		users, err := st.User().GetAll()
-		if err != nil || len(users) == 0 {
-			return false
+		var u store.User
+		switch {
+		case err == nil && len(users) > 0:
+			u = users[0]
+		default:
+			// Dashboard can be logged in via a leftover JWT while the users
+			// table is empty (Railway ephemeral disk). Fall back to the trader
+			// owner or TELEGRAM_OWNER_USER_ID so /start can still bind.
+			if traders, tErr := st.Trader().ListAll(); tErr == nil && len(traders) > 0 && traders[0].UserID != "" {
+				u = store.User{ID: traders[0].UserID, Email: "dashboard"}
+				logger.Infof("Bot: no users row; using trader owner %s", u.ID)
+			} else if id := strings.TrimSpace(os.Getenv("TELEGRAM_OWNER_USER_ID")); id != "" {
+				u = store.User{ID: id, Email: "dashboard"}
+				logger.Infof("Bot: no users row; using TELEGRAM_OWNER_USER_ID %s", u.ID)
+			} else {
+				return false
+			}
 		}
-		u := users[0]
 		if u.ID == botUserID {
 			return true
 		}
@@ -131,7 +157,7 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 		}
 
 		// ── /start ────────────────────────────────────────────────────────────
-		if text == "/start" {
+		if isStartCommand(text) {
 			resolveBotUser()
 			if botUserID == "" {
 				sendMsg(bot, chatID,
@@ -139,10 +165,16 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 				continue
 			}
 			if allowedChatID == 0 {
+				bindCode := parseStartBindCode(text)
+				if bindCode == "" {
+					sendMsg(bot, chatID,
+						"Binding requires a code from the NOFX dashboard.\nOpen Settings → Telegram and send:\n/start YOUR_CODE")
+					continue
+				}
 				username := update.Message.From.UserName
-				if err := st.TelegramConfig().BindUser(chatID, "@"+username); err != nil {
+				if err := st.TelegramConfig().BindUser(chatID, "@"+username, bindCode); err != nil {
 					logger.Errorf("Failed to bind Telegram user: %v", err)
-					sendMsg(bot, chatID, "Binding failed. Please try again.")
+					sendMsg(bot, chatID, "Invalid or expired bind code. Copy a fresh code from the NOFX dashboard.")
 					continue
 				}
 				allowedChatID = chatID
@@ -169,6 +201,25 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 		if text == "/help" {
 			lang := st.TelegramConfig().GetLanguage()
 			sendMarkdownMsg(bot, chatID, helpMsg(lang))
+			continue
+		}
+
+		// ── Quick commands (no AI) ───────────────────────────────────────────
+		if isQuickCommand(text) {
+			if allowedChatID != 0 && chatID != allowedChatID {
+				sendMsg(bot, chatID, "Unauthorized.")
+				continue
+			}
+			if allowedChatID == 0 {
+				sendMsg(bot, chatID, "Send /start first.")
+				continue
+			}
+			resolveBotUser()
+			if botUserID == "" {
+				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
+				continue
+			}
+			handleQuickCommand(bot, chatID, text, st, botUserID, cfg.APIServerPort)
 			continue
 		}
 
@@ -271,31 +322,18 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 	// 1. Prefer the model explicitly configured for Telegram (Settings → Telegram → AI Model)
 	if tgCfg, err := st.TelegramConfig().Get(); err == nil && tgCfg.ModelID != "" {
 		if model, err := st.AIModel().Get(userID, tgCfg.ModelID); err == nil && model.Enabled {
-			apiKey := string(model.APIKey)
-			if apiKey != "" {
-				client := clientForProvider(model.Provider)
-				client.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
-				if isUSDCProvider(model.Provider) {
-					logger.Infof("Telegram agent: provider=%s (USDC payment) user=%s", model.Provider, userID)
-				} else {
-					logger.Infof("Telegram agent: provider=%s user=%s", model.Provider, userID)
-				}
+			if client := buildLLMClientFromModel(userID, tgCfg.ModelID, model, "telegram_config"); client != nil {
 				return client
 			}
+		} else {
+			logger.Warnf("Telegram agent: model_id=%q not found or disabled for user=%s, falling back",
+				tgCfg.ModelID, userID)
 		}
 	}
 
 	// 2. Fall back to first enabled model
 	if model, err := st.AIModel().GetDefault(userID); err == nil {
-		apiKey := string(model.APIKey)
-		if apiKey != "" {
-			client := clientForProvider(model.Provider)
-			client.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
-			if isUSDCProvider(model.Provider) {
-				logger.Infof("Telegram agent: provider=%s (USDC payment) user=%s", model.Provider, userID)
-			} else {
-				logger.Infof("Telegram agent: provider=%s user=%s", model.Provider, userID)
-			}
+		if client := buildLLMClientFromModel(userID, model.ID, model, "default"); client != nil {
 			return client
 		}
 	}
@@ -309,10 +347,28 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 		if pair.key != "" {
 			client := clientForProvider(pair.provider)
 			client.SetAPIKey(pair.key, pair.url, "")
+			logger.Infof("Telegram agent: user=%s source=env provider=%s", userID, pair.provider)
 			return client
 		}
 	}
 	return nil
+}
+
+func buildLLMClientFromModel(userID, modelID string, model store.AIModel, source string) mcp.AIClient {
+	apiKey := string(model.APIKey)
+	if apiKey == "" {
+		return nil
+	}
+	client := clientForProvider(model.Provider)
+	client.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
+	if isUSDCProvider(model.Provider) {
+		logger.Infof("Telegram agent: user=%s source=%s tg_model_id=%s ai_model_id=%s provider=%s custom_model=%q (USDC)",
+			userID, source, modelID, model.ID, model.Provider, model.CustomModelName)
+	} else {
+		logger.Infof("Telegram agent: user=%s source=%s tg_model_id=%s ai_model_id=%s provider=%s custom_model=%q",
+			userID, source, modelID, model.ID, model.Provider, model.CustomModelName)
+	}
+	return client
 }
 
 // isUSDCProvider returns true for providers that pay per call with USDC (x402 protocol).
@@ -375,21 +431,23 @@ func statusMsg(st *store.Store, userID string, apiPort int, lang string) string 
 	if lang == "zh" {
 		return `✅ *NOFX is ready!*
 
-Just tell me what you want:
+直接说需求，或使用快捷命令：
 
-📊 "Show my positions"
-💰 "What's my balance?"
-🤖 "Create a BTC trend strategy and start it"
-⏹ "Stop all traders"
+📊 /positions — 查看持仓
+💰 /balanca — 查看余额
+🔔 /notify — 开/关交易通知
 
 /help for more · /lang to change language`
 	}
 	return `✅ *NOFX is ready!*
 
-Just tell me what you want:
+Just tell me what you want, or use quick commands:
 
-📊 "Show my positions"
-💰 "What's my balance?"
+📊 /positions — open positions
+💰 /balanca — account balance
+🔔 /notify — trade alerts on/off
+
+Or ask in plain text:
 🤖 "Create a BTC trend strategy and start it"
 ⏹ "Stop all traders"
 
@@ -400,6 +458,28 @@ Just tell me what you want:
 
 func langMenuMsg() string {
 	return "🌐 *Choose your language*\n\n1 — English\n2 — Chinese\n\nReply with 1 or 2"
+}
+
+// isStartCommand reports whether a Telegram message is a /start command.
+func isStartCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	return len(fields) >= 1 && strings.HasPrefix(fields[0], "/start")
+}
+
+// parseStartBindCode extracts the bind-code payload from "/start CODE" or
+// "/start@botname CODE". Returns "" when no code was supplied.
+func parseStartBindCode(text string) string {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 2 || !strings.HasPrefix(fields[0], "/start") {
+		return ""
+	}
+	if strings.HasPrefix(fields[1], "@") {
+		if len(fields) >= 3 {
+			return fields[2]
+		}
+		return ""
+	}
+	return fields[1]
 }
 
 func parseLangChoice(text string) string {
@@ -433,6 +513,10 @@ func helpMsg(lang string) string {
 • "Stop all trading"
 
 *Commands*
+/balanca — balance
+/positions — open positions
+/traders — list traders
+/notify — auto alerts on/off
 /start — refresh status
 /lang  — change language
 /help  — show this`
@@ -454,6 +538,10 @@ func helpMsg(lang string) string {
 • "Stop all trading"
 
 *Commands*
+/balanca — balance
+/positions — open positions
+/traders — list traders
+/notify — auto alerts on/off
 /start — refresh status
 /lang  — change language
 /help  — show this`

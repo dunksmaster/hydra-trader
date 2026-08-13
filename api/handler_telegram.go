@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"nofx/store"
 )
 
 // handleGetTelegramConfig returns current Telegram bot configuration and binding status
@@ -37,7 +39,19 @@ func (s *Server) handleGetTelegramConfig(c *gin.Context) {
 		"bound_at":     cfg.BoundAt,
 		"token_masked": tokenMasked,
 		"model_id":     cfg.ModelID,
+		"bind_code":    bindCodeForResponse(s.store, cfg),
 	})
+}
+
+func bindCodeForResponse(st *store.Store, cfg *store.TelegramConfig) string {
+	if cfg.ChatID != 0 || cfg.BotToken == "" {
+		return ""
+	}
+	code, err := st.TelegramConfig().EnsureBindCode()
+	if err != nil {
+		return ""
+	}
+	return code
 }
 
 // handleUpdateTelegramConfig saves bot token (+ optional model ID) and triggers bot hot-reload

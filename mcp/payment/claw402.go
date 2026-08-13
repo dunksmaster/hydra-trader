@@ -168,6 +168,7 @@ func (c *Claw402Client) resolveEndpoint() string {
 	if strings.HasPrefix(c.Model, "/api/") {
 		return c.Model
 	}
+	c.Log.Warnf("⚠️  [MCP] Claw402: unknown model %q, falling back to %s", c.Model, DefaultClaw402Model)
 	return claw402ModelEndpoints[DefaultClaw402Model]
 }
 
@@ -248,6 +249,22 @@ func stripMaxTokens(body map[string]any) map[string]any {
 	return body
 }
 
+// openAIToolCompat adjusts GPT-5.6 request bodies when function tools are present.
+// Claw402 routes these models through /v1/chat/completions with default
+// reasoning_effort, which OpenAI rejects alongside tools. Setting "none" enables
+// the Telegram agent's api_request tool loop.
+func openAIToolCompat(body map[string]any, model string, req *mcp.Request) map[string]any {
+	if body == nil || req == nil || len(req.Tools) == 0 {
+		return body
+	}
+	m := strings.ToLower(model)
+	if !strings.HasPrefix(m, "gpt-5.6") {
+		return body
+	}
+	body["reasoning_effort"] = "none"
+	return body
+}
+
 func (c *Claw402Client) BuildMCPRequestBody(systemPrompt, userPrompt string) map[string]any {
 	if c.claudeProxy != nil {
 		return c.claudeProxy.BuildMCPRequestBody(systemPrompt, userPrompt)
@@ -259,7 +276,12 @@ func (c *Claw402Client) BuildRequestBodyFromRequest(req *mcp.Request) map[string
 	if c.claudeProxy != nil {
 		return c.claudeProxy.BuildRequestBodyFromRequest(req)
 	}
-	return stripMaxTokens(c.Client.BuildRequestBodyFromRequest(req))
+	body := stripMaxTokens(c.Client.BuildRequestBodyFromRequest(req))
+	model := req.Model
+	if model == "" {
+		model = c.Model
+	}
+	return openAIToolCompat(body, model, req)
 }
 
 func (c *Claw402Client) ParseMCPResponse(body []byte) (string, error) {

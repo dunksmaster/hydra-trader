@@ -437,3 +437,43 @@ func TestToolCallIDPropagated(t *testing.T) {
 		t.Fatalf("tool result with ToolCallID='call-xyz-123' not found in messages: %+v", llm.lastMsgs)
 	}
 }
+
+// TestReasoningContentEchoedAfterToolCall ensures assistant tool-call history
+// includes reasoning_content for DeepSeek V4 multi-turn follow-ups.
+func TestReasoningContentEchoedAfterToolCall(t *testing.T) {
+	srv, port := mockAPIServer(map[string]string{
+		"/api/account": `{"balance":100}`,
+	})
+	defer srv.Close()
+
+	llm := &mockLLM{responses: []*mcp.LLMResponse{
+		{
+			ReasoningContent: "plan: fetch account first",
+			ToolCalls: []mcp.ToolCall{{
+				ID:   "c1",
+				Type: "function",
+				Function: mcp.ToolCallFunction{
+					Name:      "api_request",
+					Arguments: `{"method":"GET","path":"/api/account","body":{}}`,
+				},
+			}},
+		},
+		textReply("Balance is 100."),
+	}}
+	a := New(port, "tok", "test-user", mockGetLLM(llm), testPrompt)
+	a.Run("show balance", nil)
+
+	if llm.calls < 2 {
+		t.Fatalf("expected at least 2 LLM calls, got %d", llm.calls)
+	}
+	found := false
+	for _, msg := range llm.lastMsgs {
+		if msg.Role == "assistant" && msg.ReasoningContent == "plan: fetch account first" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected reasoning_content echoed in assistant message, got: %+v", llm.lastMsgs)
+	}
+}

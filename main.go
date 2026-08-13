@@ -10,6 +10,7 @@ import (
 	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
+	"nofx/telegram"
 	"nofx/telemetry"
 	"os"
 	"os/signal"
@@ -138,11 +139,16 @@ func main() {
 	// Start API server
 	server := api.NewServer(traderManager, st, cryptoService, cfg.APIServerPort)
 
+	telegramReloadCh := make(chan struct{}, 1)
+	server.SetTelegramReloadCh(telegramReloadCh)
+
 	go func() {
 		if err := server.Start(); err != nil {
 			logger.Fatalf("❌ Failed to start API server: %v", err)
 		}
 	}()
+
+	go telegram.Start(cfg, st, telegramReloadCh)
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)

@@ -285,7 +285,12 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
                         </div>
                         <div className="text-xs space-y-1" style={{ color: '#8A8478' }}>
                           <div>1. {t('telegram.step2Desc1', language)}</div>
-                          <div>2. {t('telegram.step2Desc2', language)} <code className="text-nofx-success">/start</code></div>
+                          <div>
+                            2. {t('telegram.step2Desc2', language)}{' '}
+                            <code className="text-nofx-success">
+                              /start {config?.bind_code ?? 'YOUR_CODE'}
+                            </code>
+                          </div>
                           <div>3. {t('telegram.step2Desc3', language)}</div>
                         </div>
                       </div>

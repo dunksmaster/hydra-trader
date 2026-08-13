@@ -210,10 +210,12 @@ func (s *AIModelStore) UpdateWithName(userID, id, name string, enabled bool, api
 	if err == nil {
 		// Update existing model
 		updates := map[string]interface{}{
-			"enabled":           enabled,
-			"custom_api_url":    customAPIURL,
-			"custom_model_name": customModelName,
-			"updated_at":        time.Now().UTC(),
+			"enabled":        enabled,
+			"custom_api_url": customAPIURL,
+			"updated_at":     time.Now().UTC(),
+		}
+		if strings.TrimSpace(customModelName) != "" {
+			updates["custom_model_name"] = customModelName
 		}
 		if strings.TrimSpace(name) != "" {
 			updates["name"] = strings.TrimSpace(name)
@@ -231,10 +233,12 @@ func (s *AIModelStore) UpdateWithName(userID, id, name string, enabled bool, api
 	if err == nil {
 		logger.Warnf("⚠️ Using legacy provider matching to update model: %s -> %s", provider, existingModel.ID)
 		updates := map[string]interface{}{
-			"enabled":           enabled,
-			"custom_api_url":    customAPIURL,
-			"custom_model_name": customModelName,
-			"updated_at":        time.Now().UTC(),
+			"enabled":        enabled,
+			"custom_api_url": customAPIURL,
+			"updated_at":     time.Now().UTC(),
+		}
+		if strings.TrimSpace(customModelName) != "" {
+			updates["custom_model_name"] = customModelName
 		}
 		if strings.TrimSpace(name) != "" {
 			updates["name"] = strings.TrimSpace(name)

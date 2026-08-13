@@ -2,10 +2,12 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"nofx/auth"
 	"nofx/logger"
 	"nofx/mcp"
+	"nofx/mcp/payment"
 	"nofx/telegram/session"
 	"strings"
 )
@@ -224,12 +226,16 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 		resp, err := llm.CallWithRequestFull(req)
 		if err != nil {
 			logger.Errorf("Agent: LLM call failed (iteration %d): %v", i+1, err)
-			return "AI assistant temporarily unavailable. Please try again."
+			return llmErrorReply(err)
 		}
 
 		// No tool calls → LLM returned a final text reply.
 		if len(resp.ToolCalls) == 0 {
 			reply := strings.TrimSpace(resp.Content)
+			if reply == "" {
+				logger.Warnf("Agent: empty LLM reply at iteration %d", i+1)
+				return "AI assistant returned an empty response. Please try again."
+			}
 			if onChunk != nil {
 				onChunk(reply)
 			}
@@ -244,9 +250,11 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 		}
 
 		// Append assistant message carrying the tool calls (no content field).
+		// DeepSeek V4 thinking models require reasoning_content echoed on follow-up turns.
 		turnMsgs = append(turnMsgs, mcp.Message{
-			Role:      "assistant",
-			ToolCalls: resp.ToolCalls,
+			Role:             "assistant",
+			ToolCalls:        resp.ToolCalls,
+			ReasoningContent: resp.ReasoningContent,
 		})
 
 		// Execute each tool call and append the results as tool messages.
@@ -282,4 +290,15 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 // ResetMemory clears conversation history (called on /start).
 func (a *Agent) ResetMemory() {
 	a.memory.ResetFull()
+}
+
+func llmErrorReply(err error) string {
+	var funds *payment.ErrInsufficientFunds
+	if errors.As(err, &funds) {
+		return fmt.Sprintf(
+			"Claw402 wallet needs at least $%.2f USDC (balance $%.4f). Top up in Settings → AI Models.",
+			funds.Needed, funds.Balance,
+		)
+	}
+	return "AI assistant temporarily unavailable. Please try again."
 }

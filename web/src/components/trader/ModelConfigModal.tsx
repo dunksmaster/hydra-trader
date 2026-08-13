@@ -67,9 +67,24 @@ export function ModelConfigModal({
     if (editingModelId && selectedModel) {
       setApiKey(selectedModel.apiKey || '')
       setBaseUrl(selectedModel.customApiUrl || '')
-      setModelName(selectedModel.customModelName || '')
+      const isClaw402 =
+        selectedModel.provider === 'claw402' || selectedModel.id === 'claw402'
+      setModelName(
+        selectedModel.customModelName ||
+          (isClaw402 ? DEFAULT_CLAW402_MODEL : '')
+      )
     }
   }, [editingModelId, selectedModel])
+
+  const isClaw402Model = (model?: AIModel | null) =>
+    model?.provider === 'claw402' || model?.id === 'claw402'
+
+  const resolvedModelNameForSave = () => {
+    if (isClaw402Model(selectedModel)) {
+      return modelName.trim() || DEFAULT_CLAW402_MODEL
+    }
+    return modelName.trim() || undefined
+  }
 
   const handleSelectModel = (modelId: string) => {
     setSelectedModelId(modelId)
@@ -95,7 +110,7 @@ export function ModelConfigModal({
       selectedModelId,
       apiKey.trim(),
       baseUrl.trim() || undefined,
-      modelName.trim() || undefined
+      resolvedModelNameForSave()
     )
   }
 

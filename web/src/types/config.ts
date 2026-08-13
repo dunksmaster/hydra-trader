@@ -16,6 +16,7 @@ export interface TelegramConfig {
   is_bound: boolean // Whether a user has sent /start
   bound_chat_id?: number // The bound chat ID (if any)
   model_id?: string // AI model selected for Telegram replies
+  bind_code?: string // One-time code required for /start binding
 }
 
 export interface Exchange {

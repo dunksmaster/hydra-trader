@@ -1,37 +1,43 @@
-# Railway All-in-One: Reuse existing GHCR images
-# Extract content from existing images and merge into a single container
+# Railway All-in-One: build backend from this source (so Telegram listener starts),
+# reuse official frontend image and TA-Lib libraries.
 
-# Extract binary from backend image
-FROM ghcr.io/nofxaios/nofx/nofx-backend:latest AS backend
+FROM ghcr.io/nofxaios/nofx/nofx-backend:latest AS backend-libs
 
-# Extract static files from frontend image
+FROM golang:1.25.11-alpine AS backend-builder
+
+RUN apk add --no-cache git make gcc g++ musl-dev
+
+COPY --from=backend-libs /usr/local /usr/local
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=1 GOOS=linux \
+    CGO_CFLAGS="-D_LARGEFILE64_SOURCE" \
+    go build -trimpath -ldflags="-s -w" -o nofx .
+
 FROM ghcr.io/nofxaios/nofx/nofx-frontend:latest AS frontend
 
-# Final image
 FROM alpine:latest
 
 RUN apk add --no-cache ca-certificates tzdata sqlite nginx openssl gettext
 
-# Copy backend binary
-COPY --from=backend /app/nofx /app/nofx
-
-# Copy TA-Lib libraries
-COPY --from=backend /usr/local/lib/libta_lib* /usr/local/lib/
+COPY --from=backend-builder /app/nofx /app/nofx
+COPY --from=backend-libs /usr/local/lib/libta_lib* /usr/local/lib/
 RUN ldconfig /usr/local/lib 2>/dev/null || true
 
-# Copy frontend static files
 COPY --from=frontend /usr/share/nginx/html /usr/share/nginx/html
 
 WORKDIR /app
 RUN mkdir -p /app/data
 
-# Startup script (includes nginx config generation)
 COPY railway/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
 ENV DB_PATH=/app/data/data.db
 
-# Railway automatically sets the PORT environment variable
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
