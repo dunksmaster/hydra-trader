@@ -354,7 +354,10 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 	return nil
 }
 
-func buildLLMClientFromModel(userID, modelID string, model store.AIModel, source string) mcp.AIClient {
+func buildLLMClientFromModel(userID, modelID string, model *store.AIModel, source string) mcp.AIClient {
+	if model == nil {
+		return nil
+	}
 	apiKey := string(model.APIKey)
 	if apiKey == "" {
 		return nil
@@ -516,7 +519,7 @@ func helpMsg(lang string) string {
 /balanca — balance
 /positions — open positions
 /traders — list traders
-/notify — auto alerts on/off
+/notify — auto alerts on/off (try /notify test)
 /start — refresh status
 /lang  — change language
 /help  — show this`
@@ -541,7 +544,7 @@ func helpMsg(lang string) string {
 /balanca — balance
 /positions — open positions
 /traders — list traders
-/notify — auto alerts on/off
+/notify — auto alerts on/off (try /notify test)
 /start — refresh status
 /lang  — change language
 /help  — show this`
