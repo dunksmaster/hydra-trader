@@ -226,8 +226,15 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 		resp, err := llm.CallWithRequestFull(req)
 		if err != nil {
 			logger.Errorf("Agent: LLM call failed (iteration %d): %v", i+1, err)
+			// #region agent log
+			logger.Infof("[DBG-e70047] {\"sessionId\":\"e70047\",\"hypothesisId\":\"H2\",\"location\":\"agent.go:Run\",\"message\":\"llm_error\",\"data\":{\"iteration\":%d,\"err\":%q}}", i+1, err.Error())
+			// #endregion
 			return llmErrorReply(err)
 		}
+		// #region agent log
+		logger.Infof("[DBG-e70047] {\"sessionId\":\"e70047\",\"hypothesisId\":\"H2\",\"location\":\"agent.go:Run\",\"message\":\"llm_ok\",\"data\":{\"iteration\":%d,\"toolCalls\":%d,\"contentLen\":%d,\"reasoningLen\":%d}}",
+			i+1, len(resp.ToolCalls), len(resp.Content), len(resp.ReasoningContent))
+		// #endregion
 
 		// No tool calls → LLM returned a final text reply.
 		if len(resp.ToolCalls) == 0 {

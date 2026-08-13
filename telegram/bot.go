@@ -206,6 +206,9 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 
 		// ── Quick commands (no AI) ───────────────────────────────────────────
 		if isQuickCommand(text) {
+			// #region agent log
+			dbgLog("H4", "bot.go:dispatch", "quick_command", map[string]any{"text": text, "chatID": chatID})
+			// #endregion
 			if allowedChatID != 0 && chatID != allowedChatID {
 				sendMsg(bot, chatID, "Unauthorized.")
 				continue
@@ -247,10 +250,16 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 
 		// ── Guard: show status if not ready for trading ───────────────────────
 		if newLLMClient(st, botUserID) == nil {
+			// #region agent log
+			dbgLog("H1", "bot.go:dispatch", "llm_client_nil", map[string]any{"text": text})
+			// #endregion
 			sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
 			continue
 		}
 
+		// #region agent log
+		dbgLog("H2", "bot.go:dispatch", "ai_agent_start", map[string]any{"text": text, "chatID": chatID})
+		// #endregion
 		// ── AI agent ─────────────────────────────────────────────────────────
 		go func(chatID int64, text string) {
 			sent, err := bot.Send(tgbotapi.NewMessage(chatID, "⏳"))
@@ -319,6 +328,9 @@ func sendMarkdownMsg(bot *tgbotapi.BotAPI, chatID int64, text string) {
 // ── LLM client ───────────────────────────────────────────────────────────────
 
 func newLLMClient(st *store.Store, userID string) mcp.AIClient {
+	// #region agent log
+	dbgLog("H1", "bot.go:newLLMClient", "entry", map[string]any{"userID": userID})
+	// #endregion
 	// 1. Prefer the model explicitly configured for Telegram (Settings → Telegram → AI Model)
 	if tgCfg, err := st.TelegramConfig().Get(); err == nil && tgCfg.ModelID != "" {
 		if model, err := st.AIModel().Get(userID, tgCfg.ModelID); err == nil && model.Enabled {
@@ -328,6 +340,11 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 		} else {
 			logger.Warnf("Telegram agent: model_id=%q not found or disabled for user=%s, falling back",
 				tgCfg.ModelID, userID)
+			// #region agent log
+			dbgLog("H1", "bot.go:newLLMClient", "telegram_model_lookup_failed", map[string]any{
+				"tgModelID": tgCfg.ModelID, "userID": userID,
+			})
+			// #endregion
 		}
 	}
 
@@ -348,9 +365,15 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 			client := clientForProvider(pair.provider)
 			client.SetAPIKey(pair.key, pair.url, "")
 			logger.Infof("Telegram agent: user=%s source=env provider=%s", userID, pair.provider)
+			// #region agent log
+			dbgLog("H1", "bot.go:newLLMClient", "env_fallback", map[string]any{"provider": pair.provider})
+			// #endregion
 			return client
 		}
 	}
+	// #region agent log
+	dbgLog("H1", "bot.go:newLLMClient", "no_client", map[string]any{"userID": userID})
+	// #endregion
 	return nil
 }
 
@@ -371,6 +394,11 @@ func buildLLMClientFromModel(userID, modelID string, model *store.AIModel, sourc
 		logger.Infof("Telegram agent: user=%s source=%s tg_model_id=%s ai_model_id=%s provider=%s custom_model=%q",
 			userID, source, modelID, model.ID, model.Provider, model.CustomModelName)
 	}
+	// #region agent log
+	dbgLog("H1", "bot.go:buildLLMClientFromModel", "client_ready", map[string]any{
+		"source": source, "modelID": model.ID, "customModel": model.CustomModelName, "provider": model.Provider,
+	})
+	// #endregion
 	return client
 }
 
