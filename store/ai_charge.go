@@ -12,6 +12,7 @@ type AICharge struct {
 	TraderID  string    `gorm:"column:trader_id;not null;index:idx_ai_charges_trader" json:"trader_id"`
 	Model     string    `gorm:"column:model;not null" json:"model"`
 	Provider  string    `gorm:"column:provider;not null" json:"provider"`
+	Source    string    `gorm:"column:source;index:idx_ai_charges_source" json:"source"`
 	CostUSD   float64   `gorm:"column:cost_usd;not null" json:"cost_usd"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
@@ -102,13 +103,79 @@ func (s *AIChargeStore) Record(traderID, model, provider string) error {
 // settled amount reported by the payment gateway (upto scheme) — instead of
 // the flat per-call estimate from modelPrices.
 func (s *AIChargeStore) RecordWithCost(traderID, model, provider string, costUSD float64) error {
+	return s.RecordWithMeta(traderID, model, provider, costUSD, "")
+}
+
+// RecordWithMeta records a charge with source attribution (decision, vergex-*, telegram, etc.).
+func (s *AIChargeStore) RecordWithMeta(traderID, model, provider string, costUSD float64, source string) error {
+	if costUSD <= 0 {
+		return nil
+	}
 	charge := &AICharge{
 		TraderID: traderID,
 		Model:    model,
 		Provider: provider,
+		Source:   source,
 		CostUSD:  costUSD,
 	}
 	return s.db.Create(charge).Error
+}
+
+// DashboardSpend aggregates spend metrics for the AI spend strip.
+type DashboardSpend struct {
+	SpentToday     float64
+	SpentWeek      float64
+	CallCountToday int64
+	CallCountWeek  int64
+	BySource       map[string]float64
+}
+
+// GetDashboardSpend returns today / rolling-7d totals and per-source breakdown.
+func (s *AIChargeStore) GetDashboardSpend(traderID string) (DashboardSpend, error) {
+	out := DashboardSpend{BySource: make(map[string]float64)}
+
+	_, todayTotal, err := s.GetCharges(traderID, "today")
+	if err != nil {
+		return out, err
+	}
+	out.SpentToday = todayTotal
+
+	_, weekTotal, err := s.GetCharges(traderID, "week")
+	if err != nil {
+		return out, err
+	}
+	out.SpentWeek = weekTotal
+
+	todayQ := s.db.Model(&AICharge{}).Where("trader_id = ?", traderID)
+	todayQ = applyPeriodFilter(todayQ, "today")
+	todayQ.Count(&out.CallCountToday)
+
+	weekQ := s.db.Model(&AICharge{}).Where("trader_id = ?", traderID)
+	weekQ = applyPeriodFilter(weekQ, "week")
+	weekQ.Count(&out.CallCountWeek)
+
+	type sourceCost struct {
+		Source string  `gorm:"column:source"`
+		Total  float64 `gorm:"column:total"`
+	}
+	var bySource []sourceCost
+	srcQ := s.db.Model(&AICharge{}).
+		Select("source, SUM(cost_usd) as total").
+		Where("trader_id = ?", traderID).
+		Group("source")
+	srcQ = applyPeriodFilter(srcQ, "week")
+	if err := srcQ.Find(&bySource).Error; err != nil {
+		return out, err
+	}
+	for _, row := range bySource {
+		key := row.Source
+		if key == "" {
+			key = "unknown"
+		}
+		out.BySource[key] = row.Total
+	}
+
+	return out, nil
 }
 
 // GetCharges returns charges for a trader within a period, plus total cost

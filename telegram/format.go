@@ -22,6 +22,7 @@ type AccountSnapshot struct {
 	DailyPnL         float64
 	InitialBalance   float64
 	TraderName       string
+	StrategyName     string
 }
 
 // ParseAccountSnapshot builds AccountSnapshot from API JSON map.
@@ -165,6 +166,9 @@ func formatPortfolioBlock(acct AccountSnapshot, lang string, title string) strin
 		if acct.TraderName != "" {
 			sb.WriteString(fmt.Sprintf("\n\n🤖 <i>%s</i>", escapeHTML(acct.TraderName)))
 		}
+		if acct.StrategyName != "" {
+			sb.WriteString(fmt.Sprintf("\n📋 策略: <i>%s</i>", escapeHTML(acct.StrategyName)))
+		}
 		return sb.String()
 	}
 
@@ -177,7 +181,95 @@ func formatPortfolioBlock(acct AccountSnapshot, lang string, title string) strin
 	if acct.TraderName != "" {
 		sb.WriteString(fmt.Sprintf("\n\n🤖 <i>%s</i>", escapeHTML(acct.TraderName)))
 	}
+	if acct.StrategyName != "" {
+		sb.WriteString(fmt.Sprintf("\n📋 Strategy: <i>%s</i>", escapeHTML(acct.StrategyName)))
+	}
 	return sb.String()
+}
+
+func traderStatusLine(info TraderInfo, lang string) string {
+	status := "stopped"
+	if info.IsRunning {
+		status = "running"
+	}
+	if lang == "zh" {
+		if info.IsRunning {
+			status = "运行中"
+		} else {
+			status = "已停止"
+		}
+	}
+	line := fmt.Sprintf("<b>%s</b> · %s", escapeHTML(info.TraderName), status)
+	if info.StrategyName != "" {
+		line += fmt.Sprintf("\nStrategy: <i>%s</i>", escapeHTML(info.StrategyName))
+	}
+	return line
+}
+
+func formatTraderPortfolioSection(tp TraderPortfolio, lang string, includePositions bool) string {
+	var sb strings.Builder
+	sb.WriteString(traderStatusLine(tp.Info, lang))
+	if tp.FetchErr != "" {
+		sb.WriteString("\n⚠️ ")
+		sb.WriteString(escapeHTML(tp.FetchErr))
+		return sb.String()
+	}
+	uInd := pnlIndicator(tp.Snapshot.UnrealizedProfit)
+	sb.WriteString(fmt.Sprintf("\nEquity <b>%s</b> · uPnL %s <b>%s</b> · <b>%d</b> open",
+		formatMoney(tp.Snapshot.TotalEquity), uInd, formatMoney(tp.Snapshot.UnrealizedProfit), tp.Snapshot.PositionCount))
+	if !includePositions || len(tp.Positions) == 0 {
+		if len(tp.Positions) == 0 && tp.FetchErr == "" {
+			sb.WriteString("\n📊 No open positions.")
+		}
+		return sb.String()
+	}
+	for _, p := range tp.Positions {
+		sb.WriteString("\n\n")
+		sb.WriteString(formatPositionBlock(p, lang))
+	}
+	return sb.String()
+}
+
+// formatMultiTraderSnapshot stacks every trader for daily snapshot / notify test.
+func formatMultiTraderSnapshot(portfolios []TraderPortfolio, lang string, includePositions bool) string {
+	if len(portfolios) == 0 {
+		if lang == "zh" {
+			return "暂无交易员。"
+		}
+		return "No traders configured."
+	}
+	var sb strings.Builder
+	for i, tp := range portfolios {
+		if i > 0 {
+			sb.WriteString("\n\n────────────\n\n")
+		}
+		sb.WriteString(formatTraderPortfolioSection(tp, lang, includePositions))
+	}
+	return sb.String()
+}
+
+// formatBalanceForPortfolios renders portfolio summary for selected trader(s).
+func formatBalanceForPortfolios(portfolios []TraderPortfolio, lang string) string {
+	title := "💰 Portfolio"
+	if lang == "zh" {
+		title = "💰 账户"
+	}
+	if len(portfolios) == 1 && portfolios[0].FetchErr == "" {
+		return formatPortfolioBlock(portfolios[0].Snapshot, lang, title)
+	}
+	var sb strings.Builder
+	sb.WriteString(escapeHTML(title))
+	sb.WriteString("\n\n")
+	sb.WriteString(formatMultiTraderSnapshot(portfolios, lang, false))
+	return sb.String()
+}
+
+// formatPositionsForPortfolios renders positions for selected trader(s).
+func formatPositionsForPortfolios(portfolios []TraderPortfolio, lang string) string {
+	if len(portfolios) == 1 && portfolios[0].FetchErr == "" {
+		return formatRichPositions(portfolios[0].Snapshot, portfolios[0].Positions, lang)
+	}
+	return formatMultiTraderSnapshot(portfolios, lang, true)
 }
 
 // formatPositionsHeader returns the open-positions title line.
@@ -263,7 +355,7 @@ func formatPortfolioFooterOneLine(acct AccountSnapshot) string {
 
 // formatTradeAlertRich renders an expanded trade notification.
 func formatTradeAlertRich(st *store.Store, e events.TradeEvent, lang string, footer *AccountSnapshot) string {
-	traderName := lookupTraderName(st, e.TraderID)
+	traderName, strategyName := lookupTraderMeta(st, e.TraderID)
 	symbol := e.Symbol
 	if !strings.HasPrefix(strings.ToLower(symbol), "xyz:") {
 		symbol = displaySymbol(symbol)
@@ -314,7 +406,13 @@ func formatTradeAlertRich(st *store.Store, e events.TradeEvent, lang string, foo
 	}
 
 	if traderName != "" {
-		sb.WriteString(fmt.Sprintf("┗ 🤖 <i>%s</i>", escapeHTML(traderName)))
+		sb.WriteString(fmt.Sprintf("┣ 🤖 Trader <b>%s</b>\n", escapeHTML(traderName)))
+	}
+	if strategyName != "" {
+		sb.WriteString(fmt.Sprintf("┣ 📋 Strategy <i>%s</i>\n", escapeHTML(strategyName)))
+	}
+	if traderName != "" || strategyName != "" {
+		sb.WriteString("┗")
 	} else {
 		sb.WriteString("┗")
 	}

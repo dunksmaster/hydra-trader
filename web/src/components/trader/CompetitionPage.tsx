@@ -16,7 +16,11 @@ export function CompetitionPage() {
   const [selectedTrader, setSelectedTrader] = useState<any>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
 
-  const { data: competition } = useSWR<CompetitionData>(
+  const {
+    data: competition,
+    error: competitionError,
+    isLoading: competitionLoading,
+  } = useSWR<CompetitionData>(
     'competition',
     api.getCompetition,
     {
@@ -43,7 +47,23 @@ export function CompetitionPage() {
     setSelectedTrader(null)
   }
 
-  if (!competition) {
+  if (competitionError) {
+    return (
+      <DeepVoidBackground className="py-8" disableAnimation>
+        <div className="container mx-auto max-w-7xl px-4 md:px-8">
+          <div className="rounded-xl border border-red-300/40 bg-red-50 p-8 text-center">
+            <p className="text-sm text-red-700">
+              {competitionError instanceof Error
+                ? competitionError.message
+                : 'Failed to load competition data'}
+            </p>
+          </div>
+        </div>
+      </DeepVoidBackground>
+    )
+  }
+
+  if (competitionLoading || !competition) {
     return (
       <DeepVoidBackground className="py-8" disableAnimation>
         <div className="container mx-auto max-w-7xl px-4 md:px-8">

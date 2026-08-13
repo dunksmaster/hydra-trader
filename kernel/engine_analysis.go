@@ -164,7 +164,7 @@ func enrichVergexDataWithStrategy(ctx *Context, engine *StrategyEngine) {
 			symbols = append(symbols, pos.Symbol)
 		}
 	}
-	ctx.VergexDataMap = engine.FetchVergexDataBatch(nil, symbols)
+	ctx.VergexDataMap = engine.FetchVergexDataBatch(engine.chargeContext(), symbols)
 }
 
 // ============================================================================

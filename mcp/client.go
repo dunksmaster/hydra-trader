@@ -89,6 +89,10 @@ type Client struct {
 	// actual cost from this instead. Nil when the stream carried no usage.
 	LastCallUsage *TokenUsage
 
+	// ChargeCtx carries trader/source metadata for Claw402 charge recording.
+	// Set by the auto-trader or API handlers before paid calls.
+	ChargeCtx context.Context
+
 	// Hooks are used to implement dynamic dispatch (polymorphism)
 	// When provider.DeepSeekClient embeds Client, Hooks point to DeepSeekClient
 	// This way methods called in Call() are automatically dispatched to the overridden version

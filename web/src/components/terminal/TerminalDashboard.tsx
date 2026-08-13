@@ -32,6 +32,7 @@ const CRYPTO_MAJORS = new Set([
 // fixed height for the three row-1 panels so the row stays balanced at any width
 const ROW1_H = 500
 import { FlowMarkets } from './FlowMarkets'
+import { AISpendStrip } from './AISpendStrip'
 import './terminal.css'
 
 interface TerminalDashboardProps {
@@ -186,14 +187,14 @@ export function TerminalDashboard({
   )
   const { data: realFlow } = useSWR(
     traderId ? ['flow-markets', traderId] : null,
-    () => api.getFlowMarkets(selectedTrader?.ai_model, 'mainnet', '1h', 50, true),
+    () => api.getFlowMarkets(selectedTrader?.ai_model, 'mainnet', '1h', 50, true, traderId),
     // paid x402 endpoint — poll slowly (5m) to conserve claw402 funds; the
     // topology beam animation is client-side and stays fast regardless
     { refreshInterval: 300000, shouldRetryOnError: false }
   )
   const { data: realSignalRank } = useSWR(
     traderId ? ['signal-rank', traderId] : null,
-    () => api.getSignalRanking(selectedTrader?.ai_model, 'mainnet', 'all', 30, true),
+    () => api.getSignalRanking(selectedTrader?.ai_model, 'mainnet', 'all', 30, true, traderId),
     // paid x402 endpoint — poll slowly (5m) to conserve claw402 funds
     { refreshInterval: 300000, shouldRetryOnError: false }
   )
@@ -444,6 +445,9 @@ export function TerminalDashboard({
         </div>
         <div className="tm-rule" />
 
+        <AISpendStrip traderId={traderId} />
+        <div className="tm-rule" />
+
         {/* trades summary */}
         {fullStats != null && (
           <>
@@ -472,6 +476,7 @@ export function TerminalDashboard({
                 back to the other one if the guess is wrong */}
             <LiquidationMap
               symbol={activeSym}
+              traderId={traderId}
               demo={on}
               marketType={CRYPTO_MAJORS.has(activeSym) ? 'perp' : 'hip3_perp'}
               height={ROW1_H - 130}

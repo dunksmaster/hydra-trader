@@ -37,13 +37,13 @@ func Start(cfg *config.Config, st *store.Store, reloadCh <-chan struct{}) {
 	}
 }
 
-// resolveToken returns the bot token from DB (configured via Web UI).
+// resolveToken returns the bot token from DB (configured via Web UI), then TELEGRAM_BOT_TOKEN env.
 func resolveToken(cfg *config.Config, st *store.Store) string {
 	dbCfg, err := st.TelegramConfig().Get()
 	if err == nil && dbCfg.BotToken != "" {
 		return dbCfg.BotToken
 	}
-	return ""
+	return strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 }
 
 // runBot runs the bot until a reload is requested, the updates channel closes, or a fatal error.
@@ -87,36 +87,26 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 	)
 
 	resolveBotUser := func() bool {
-		users, err := st.User().GetAll()
-		var u store.User
-		switch {
-		case err == nil && len(users) > 0:
-			u = users[0]
-		default:
-			// Dashboard can be logged in via a leftover JWT while the users
-			// table is empty (Railway ephemeral disk). Fall back to the trader
-			// owner or TELEGRAM_OWNER_USER_ID so /start can still bind.
-			if traders, tErr := st.Trader().ListAll(); tErr == nil && len(traders) > 0 && traders[0].UserID != "" {
-				u = store.User{ID: traders[0].UserID, Email: "dashboard"}
-				logger.Infof("Bot: no users row; using trader owner %s", u.ID)
-			} else if id := strings.TrimSpace(os.Getenv("TELEGRAM_OWNER_USER_ID")); id != "" {
-				u = store.User{ID: id, Email: "dashboard"}
-				logger.Infof("Bot: no users row; using TELEGRAM_OWNER_USER_ID %s", u.ID)
-			} else {
-				return false
-			}
+		userID, err := resolveBotUserID(st)
+		if err != nil {
+			return false
 		}
-		if u.ID == botUserID {
+		if userID == botUserID {
 			return true
 		}
-		newToken, err := agent.GenerateBotToken(u.ID)
+		users, _ := st.User().GetAll()
+		email := "dashboard"
+		if len(users) > 0 && users[0].ID == userID {
+			email = users[0].Email
+		}
+		newToken, err := agent.GenerateBotToken(userID)
 		if err != nil {
-			logger.Errorf("Failed to generate bot JWT for user %s: %v", u.ID, err)
+			logger.Errorf("Failed to generate bot JWT for user %s: %v", userID, err)
 			return false
 		}
 		prev := botUserID
-		botUserID = u.ID
-		botUserEmail = u.Email
+		botUserID = userID
+		botUserEmail = email
 		botToken = newToken
 		agents = agent.NewManager(cfg.APIServerPort, botToken, botUserEmail, botUserID,
 			func() mcp.AIClient { return newLLMClient(st, botUserID) },
@@ -139,6 +129,22 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 	awaitingLang := false
 
 	for update := range updates {
+		// ── Inline trader picker ────────────────────────────────────────────
+		if update.CallbackQuery != nil {
+			if allowedChatID != 0 && update.CallbackQuery.Message != nil &&
+				update.CallbackQuery.Message.Chat.ID != allowedChatID {
+				cb := tgbotapi.NewCallback(update.CallbackQuery.ID, "Unauthorized")
+				bot.Request(cb) //nolint:errcheck
+				continue
+			}
+			if strings.HasPrefix(update.CallbackQuery.Data, "use:") {
+				resolveBotUser()
+				lang := st.TelegramConfig().GetLanguage()
+				handleTraderUseCallback(bot, update.CallbackQuery, st, lang, botUserID, cfg.APIServerPort)
+			}
+			continue
+		}
+
 		if update.Message == nil {
 			continue
 		}
@@ -207,9 +213,6 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 
 		// ── Quick commands (no AI) ───────────────────────────────────────────
 		if isQuickCommand(text) {
-			// #region agent log
-			dbgLog("H4", "bot.go:dispatch", "quick_command", map[string]any{"text": text, "chatID": chatID})
-			// #endregion
 			if allowedChatID != 0 && chatID != allowedChatID {
 				sendMsg(bot, chatID, "Unauthorized.")
 				continue
@@ -242,11 +245,6 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 
 		// ── Plain-text shortcuts (same as /positions, /balanca, etc.) ────────
 		if intent := matchNLQuickIntent(text); intent != "" {
-			// #region agent log
-			dbgLog("H6", "bot.go:dispatch", "nl_quick_intent", map[string]any{
-				"text": text, "intent": intent, "chatID": chatID,
-			})
-			// #endregion
 			resolveBotUser()
 			if botUserID == "" {
 				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
@@ -267,16 +265,10 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 
 		// ── Guard: show status if not ready for trading ───────────────────────
 		if newLLMClient(st, botUserID) == nil {
-			// #region agent log
-			dbgLog("H1", "bot.go:dispatch", "llm_client_nil", map[string]any{"text": text})
-			// #endregion
 			sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
 			continue
 		}
 
-		// #region agent log
-		dbgLog("H2", "bot.go:dispatch", "ai_agent_start", map[string]any{"text": text, "chatID": chatID})
-		// #endregion
 		// ── AI agent ─────────────────────────────────────────────────────────
 		go func(chatID int64, text string) {
 			sent, err := bot.Send(tgbotapi.NewMessage(chatID, "⏳"))
@@ -337,17 +329,8 @@ func sendMarkdownMsg(bot *tgbotapi.BotAPI, chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "Markdown"
 	if _, err := bot.Send(msg); err != nil {
-		// #region agent log
-		dbgLog("H7", "bot.go:sendMarkdownMsg", "markdown_send_failed", map[string]any{
-			"chatID": chatID, "err": err.Error(),
-		})
-		// #endregion
 		plain := tgbotapi.NewMessage(chatID, text)
-		if _, err2 := bot.Send(plain); err2 != nil {
-			dbgLog("H7", "bot.go:sendMarkdownMsg", "plain_send_failed", map[string]any{
-				"chatID": chatID, "err": err2.Error(),
-			})
-		}
+		bot.Send(plain) //nolint:errcheck
 	}
 }
 
@@ -363,8 +346,8 @@ func queryKeyboard(lang string) tgbotapi.ReplyKeyboardMarkup {
 	}
 	return tgbotapi.ReplyKeyboardMarkup{
 		Keyboard: [][]tgbotapi.KeyboardButton{
-			{{Text: "Show my positions"}, {Text: "Show my balance"}},
-			{{Text: "List my traders"}},
+			{{Text: "Balanca"}, {Text: "Pozicionet"}},
+			{{Text: "Tregtarët"}, {Text: "Njoftime"}},
 		},
 		ResizeKeyboard: true,
 	}
@@ -400,9 +383,13 @@ func stripHTML(s string) string {
 
 func registerBotCommands(bot *tgbotapi.BotAPI) {
 	cmds := []tgbotapi.BotCommand{
+		{Command: "start", Description: "Bind account & status"},
 		{Command: "balanca", Description: "Portfolio & balance"},
 		{Command: "positions", Description: "Open positions detail"},
+		{Command: "traders", Description: "Choose strategy / trader"},
+		{Command: "use", Description: "Switch trader (1, 2, all)"},
 		{Command: "notify", Description: "Alerts on/off/test"},
+		{Command: "lang", Description: "Change language"},
 		{Command: "help", Description: "All commands"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(cmds...)
@@ -414,9 +401,6 @@ func registerBotCommands(bot *tgbotapi.BotAPI) {
 // ── LLM client ───────────────────────────────────────────────────────────────
 
 func newLLMClient(st *store.Store, userID string) mcp.AIClient {
-	// #region agent log
-	dbgLog("H1", "bot.go:newLLMClient", "entry", map[string]any{"userID": userID})
-	// #endregion
 	// 1. Prefer the model explicitly configured for Telegram (Settings → Telegram → AI Model)
 	if tgCfg, err := st.TelegramConfig().Get(); err == nil && tgCfg.ModelID != "" {
 		if model, err := st.AIModel().Get(userID, tgCfg.ModelID); err == nil && model.Enabled {
@@ -426,11 +410,6 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 		} else {
 			logger.Warnf("Telegram agent: model_id=%q not found or disabled for user=%s, falling back",
 				tgCfg.ModelID, userID)
-			// #region agent log
-			dbgLog("H1", "bot.go:newLLMClient", "telegram_model_lookup_failed", map[string]any{
-				"tgModelID": tgCfg.ModelID, "userID": userID,
-			})
-			// #endregion
 		}
 	}
 
@@ -451,15 +430,9 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 			client := clientForProvider(pair.provider)
 			client.SetAPIKey(pair.key, pair.url, "")
 			logger.Infof("Telegram agent: user=%s source=env provider=%s", userID, pair.provider)
-			// #region agent log
-			dbgLog("H1", "bot.go:newLLMClient", "env_fallback", map[string]any{"provider": pair.provider})
-			// #endregion
 			return client
 		}
 	}
-	// #region agent log
-	dbgLog("H1", "bot.go:newLLMClient", "no_client", map[string]any{"userID": userID})
-	// #endregion
 	return nil
 }
 
@@ -480,11 +453,6 @@ func buildLLMClientFromModel(userID, modelID string, model *store.AIModel, sourc
 		logger.Infof("Telegram agent: user=%s source=%s tg_model_id=%s ai_model_id=%s provider=%s custom_model=%q",
 			userID, source, modelID, model.ID, model.Provider, model.CustomModelName)
 	}
-	// #region agent log
-	dbgLog("H1", "bot.go:buildLLMClientFromModel", "client_ready", map[string]any{
-		"source": source, "modelID": model.ID, "customModel": model.CustomModelName, "provider": model.Provider,
-	})
-	// #endregion
 	return client
 }
 
@@ -562,6 +530,7 @@ Just tell me what you want, or use quick commands:
 
 📊 /positions — open positions
 💰 /balanca — account balance
+🤖 /traders — choose strategy
 🔔 /notify — trade alerts on/off
 
 Or ask in plain text:
@@ -632,11 +601,16 @@ func helpMsg(lang string) string {
 *Commands*
 /balanca — balance
 /positions — open positions
-/traders — list traders
+/traders — choose which strategy to view
+/use — switch trader (1, 2, all)
 /notify — alerts, test, daily, swing
-/notify test — rich portfolio test
-/notify daily off — disable daily snapshot
+/notify test — all-strategies snapshot preview
+/notify daily off — disable daily snapshot (once per day)
 /notify swing 5 — uPnL alert threshold
+
+Free (no claw402 AI cost): /balanca /positions /traders /notify
+Costs USDC: free-text chat (⏳ AI replies) + autopilot trading cycles
+
 /start — refresh status
 /lang  — change language
 /help  — show this`
@@ -660,11 +634,16 @@ func helpMsg(lang string) string {
 *Commands*
 /balanca — balance
 /positions — open positions
-/traders — list traders
+/traders — choose which strategy to view
+/use — switch trader (1, 2, all)
 /notify — alerts, test, daily, swing
-/notify test — rich portfolio test
-/notify daily off — disable daily snapshot
+/notify test — all-strategies snapshot preview
+/notify daily off — disable daily snapshot (once per day)
 /notify swing 5 — uPnL alert threshold
+
+Free (no claw402 AI cost): /balanca /positions /traders /notify
+Costs USDC: free-text chat (⏳ AI replies) + autopilot trading cycles
+
 /start — refresh status
 /lang  — change language
 /help  — show this`

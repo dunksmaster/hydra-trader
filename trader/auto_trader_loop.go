@@ -1,12 +1,14 @@
 package trader
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
+	"nofx/mcp"
 	"nofx/mcp/payment"
 	"nofx/provider/hyperliquid"
 	"nofx/store"
@@ -67,6 +69,25 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	// 4. Collect trading context
+	chargeModel := at.config.CustomModelName
+	if chargeModel == "" {
+		chargeModel = at.aiModel
+	}
+	chargeCtx := payment.WithChargeContext(context.Background(), payment.ChargeContext{
+		TraderID: at.id,
+		Source:   "decision",
+		Model:    chargeModel,
+		Provider: at.config.AIModel,
+	})
+	if embedder, ok := at.mcpClient.(mcp.ClientEmbedder); ok {
+		embedder.BaseClient().ChargeCtx = chargeCtx
+		defer func() { embedder.BaseClient().ChargeCtx = nil }()
+	}
+	if at.strategyEngine != nil {
+		at.strategyEngine.SetChargeContext(chargeCtx)
+		defer at.strategyEngine.SetChargeContext(nil)
+	}
+
 	ctx, err := at.buildTradingContext()
 	if err != nil {
 		at.logErrorf("failed to build trading context: %v", err)
@@ -128,32 +149,6 @@ func (at *AutoTrader) runCycle() error {
 		if len(aiDecision.Decisions) > 0 {
 			decisionJSON, _ := json.MarshalIndent(aiDecision.Decisions, "", "  ")
 			record.DecisionJSON = string(decisionJSON)
-		}
-	}
-
-	// Record AI charge (track cost regardless of decision outcome).
-	// Use the effective model name (custom model, e.g. "gpt-5.6") so the
-	// per-call price lookup matches what was actually invoked — at.aiModel is
-	// the provider id (e.g. "claw402") and would fall back to the default price.
-	// Prefer the gateway-reported settled amount (upto scheme) over the flat
-	// catalog estimate when the client exposes it.
-	if aiDecision != nil && at.store != nil {
-		chargeModel := at.config.CustomModelName
-		if chargeModel == "" {
-			chargeModel = at.aiModel
-		}
-		var chargeErr error
-		if r, ok := at.mcpClient.(interface{ LastCallCostUSD() (float64, bool) }); ok {
-			if actual, has := r.LastCallCostUSD(); has {
-				chargeErr = at.store.AICharge().RecordWithCost(at.id, chargeModel, at.config.AIModel, actual)
-			} else {
-				chargeErr = at.store.AICharge().Record(at.id, chargeModel, at.config.AIModel)
-			}
-		} else {
-			chargeErr = at.store.AICharge().Record(at.id, chargeModel, at.config.AIModel)
-		}
-		if chargeErr != nil {
-			at.logWarnf("⚠️ Failed to record AI charge: %v", chargeErr)
 		}
 	}
 

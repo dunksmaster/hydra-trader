@@ -25,6 +25,7 @@ type TelegramConfig struct {
 	NotifyEnabled     bool    `gorm:"column:notify_enabled;default:true"`    // Push trade alerts to bound chat
 	DigestEnabled     bool    `gorm:"column:digest_enabled;default:true"`    // Daily snapshot + swing alerts
 	PnlSwingThreshold float64 `gorm:"column:pnl_swing_threshold;default:5"`  // uPnL move threshold (USD)
+	SelectedTraderID  string  `gorm:"column:selected_trader_id;default:''"`  // "" or "*" = all; else one trader_id
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -57,6 +58,8 @@ type TelegramConfigStore interface {
 	IsDigestEnabled() bool
 	GetPnlSwingThreshold() float64
 	SetPnlSwingThreshold(threshold float64) error
+	GetSelectedTraderID() string
+	SetSelectedTraderID(traderID string) error
 }
 
 type telegramConfigStore struct {
@@ -146,6 +149,9 @@ func (s *telegramConfigStore) BindUser(chatID int64, username string, bindCode s
 	cfg.Username = username
 	cfg.BoundAt = time.Now()
 	cfg.BindCode = ""
+	if cfg.SelectedTraderID == "" {
+		cfg.SelectedTraderID = "*"
+	}
 	return s.db.Save(&cfg).Error
 }
 
@@ -304,5 +310,38 @@ func (s *telegramConfigStore) SetPnlSwingThreshold(threshold float64) error {
 	}
 	cfg.ID = 1
 	cfg.PnlSwingThreshold = threshold
+	return s.db.Save(&cfg).Error
+}
+
+// SelectedTraderAll is stored in selected_trader_id to mean "show every trader".
+const SelectedTraderAll = "*"
+
+func (s *telegramConfigStore) GetSelectedTraderID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var cfg TelegramConfig
+	if err := s.db.First(&cfg, 1).Error; err != nil {
+		return SelectedTraderAll
+	}
+	if cfg.SelectedTraderID == "" {
+		return SelectedTraderAll
+	}
+	return cfg.SelectedTraderID
+}
+
+func (s *telegramConfigStore) SetSelectedTraderID(traderID string) error {
+	traderID = strings.TrimSpace(traderID)
+	if traderID == "" || strings.EqualFold(traderID, "all") {
+		traderID = SelectedTraderAll
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	result := s.db.First(&cfg, 1)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	cfg.ID = 1
+	cfg.SelectedTraderID = traderID
 	return s.db.Save(&cfg).Error
 }

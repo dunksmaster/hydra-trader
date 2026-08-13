@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"nofx/api"
 	"nofx/auth"
 	"nofx/config"
 	"nofx/crypto"
 	"nofx/logger"
 	"nofx/manager"
+	"nofx/mcp/payment"
 	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
@@ -88,6 +90,24 @@ func main() {
 		logger.Fatalf("❌ Failed to initialize database: %v", err)
 	}
 	defer st.Close()
+
+	payment.RegisterChargeRecorder(func(ctx context.Context, costUSD float64) {
+		cc, ok := payment.ChargeContextFrom(ctx)
+		if !ok || cc.TraderID == "" {
+			return
+		}
+		model := cc.Model
+		if model == "" {
+			model = "claw402"
+		}
+		provider := cc.Provider
+		if provider == "" {
+			provider = "claw402"
+		}
+		if err := st.AICharge().RecordWithMeta(cc.TraderID, model, provider, costUSD, cc.Source); err != nil {
+			logger.Warnf("⚠️ Failed to record AI charge: %v", err)
+		}
+	})
 
 	// Initialize installation ID for experience improvement (anonymous statistics)
 	initInstallationID(st)

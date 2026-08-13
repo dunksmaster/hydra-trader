@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -223,6 +224,21 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 			break
 		}
 
+		traderID := a.defaultRunningTraderID()
+		model := ""
+		provider := ""
+		if embedder, ok := llm.(mcp.ClientEmbedder); ok {
+			base := embedder.BaseClient()
+			model = base.Model
+			provider = base.Provider
+		}
+		req.Ctx = payment.WithChargeContext(context.Background(), payment.ChargeContext{
+			TraderID: traderID,
+			Source:   "telegram",
+			Model:    model,
+			Provider: provider,
+		})
+
 		resp, err := llm.CallWithRequestFull(req)
 		if err != nil {
 			logger.Errorf("Agent: LLM call failed (iteration %d): %v", i+1, err)
@@ -297,6 +313,26 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 // ResetMemory clears conversation history (called on /start).
 func (a *Agent) ResetMemory() {
 	a.memory.ResetFull()
+}
+
+func (a *Agent) defaultRunningTraderID() string {
+	raw := a.apiTool.execute(&apiRequest{Method: "GET", Path: "/api/my-traders"})
+	var traders []struct {
+		TraderID  string `json:"trader_id"`
+		IsRunning bool   `json:"is_running"`
+	}
+	if err := json.Unmarshal([]byte(raw), &traders); err != nil {
+		return ""
+	}
+	for _, t := range traders {
+		if t.IsRunning {
+			return t.TraderID
+		}
+	}
+	if len(traders) > 0 {
+		return traders[0].TraderID
+	}
+	return ""
 }
 
 func llmErrorReply(err error) string {

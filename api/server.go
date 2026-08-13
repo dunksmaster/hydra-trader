@@ -272,6 +272,7 @@ Body: {"show_in_competition":<bool>}`,
 			// AI cost tracking
 			s.route(protected, "GET", "/ai-costs", "Get AI call costs for a trader (?trader_id=xxx&period=today)", s.handleGetAICosts)
 			s.route(protected, "GET", "/ai-costs/summary", "Get AI cost summary (?period=today)", s.handleGetAICostsSummary)
+			s.route(protected, "GET", "/ai-costs/dashboard", "Get AI spend dashboard metrics (?trader_id=xxx)", s.handleGetAICostsDashboard)
 
 			// AI model configuration
 			s.routeWithSchema(protected, "GET", "/models", "List AI model configs",
@@ -465,8 +466,10 @@ func (s *Server) handleHealth(c *gin.Context) {
 // handleGetSystemConfig Get system configuration (configuration that client needs to know)
 func (s *Server) handleGetSystemConfig(c *gin.Context) {
 	userCount, _ := s.store.User().Count()
+	traders, _ := s.store.Trader().ListAll()
+	initialized := userCount > 0 || len(traders) > 0
 	c.JSON(http.StatusOK, gin.H{
-		"initialized":      userCount > 0,
+		"initialized":      initialized,
 		"btc_eth_leverage": 10,
 		"altcoin_leverage": 5,
 	})

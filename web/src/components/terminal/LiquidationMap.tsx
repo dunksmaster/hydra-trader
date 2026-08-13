@@ -45,18 +45,19 @@ interface Row extends VergexHeatmapBin {
 interface LiquidationMapProps {
   symbol: string
   marketType?: string
+  traderId?: string
   /** fixed height of the scrollable ladder (px); auto-centres on the mark */
   height?: number
   /** showcase mode — render a synthetic ladder centred on the demo seed price */
   demo?: boolean
 }
 
-export function LiquidationMap({ symbol, marketType = 'hip3_perp', height = 460, demo = false }: LiquidationMapProps) {
+export function LiquidationMap({ symbol, marketType = 'hip3_perp', traderId, height = 460, demo = false }: LiquidationMapProps) {
   // Synthetic markets live under marketType "hip3_perp"; crypto majors under
   // "perp". We try the caller's guess first and fall back to the other so the
   // heatmap resolves for ANY symbol that has one.
   const fetcher = (mt: string) =>
-    api.getVergexCostLiquidationHeatmap({ marketType: mt, symbol, chain: 'mainnet', liqBand: '15' })
+    api.getVergexCostLiquidationHeatmap({ marketType: mt, symbol, chain: 'mainnet', liqBand: '15' }, traderId)
   const opts = { refreshInterval: 300000, revalidateOnFocus: false, keepPreviousData: true }
 
   const primary = useSWR(symbol && !demo ? ['heatmap', marketType, symbol] : null, () => fetcher(marketType), opts)

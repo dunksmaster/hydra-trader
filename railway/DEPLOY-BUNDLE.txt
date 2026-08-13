@@ -1,0 +1,78 @@
+NOFX Railway — SINGLE DEPLOY BUNDLE (do not ship partial uploads)
+================================================================
+
+Bundle name:  deploy-duacrypto-all-strategies-v1
+Target:       @duacrypto_bot on service nofx (accomplished-surprise)
+Status:       READY_FOR_COMPILE — NOT DEPLOYED (local go build OK on full tree)
+Live until:   deployment 1ad3349d (telegram identity + rich alerts only)
+
+HARD RULES (all Cursor agents)
+------------------------------
+1. Do NOT run railway up / railway down / railway restart until this bundle ships.
+2. Do NOT deploy from a half-finished telegram/ or mcp/ folder alone.
+3. All changes must land in nofx-src working tree; one compile; one railway up.
+4. Never paste bot tokens, JWT_SECRET, or wallet keys in chat.
+5. Volume nofx-volume at /app/data must stay mounted.
+
+WHAT THIS BUNDLE CONTAINS
+-------------------------
+
+A) Telegram — all strategies + one daily snapshot (@duacrypto_bot)
+   - telegram/traders.go, identity.go (NEW)
+   - telegram/bot.go — /traders /use, inline picker, callback queries, TELEGRAM_BOT_TOKEN fallback
+   - telegram/commands.go — multi-trader /balanca /positions; /notify test = all strategies
+   - telegram/digest.go — daily snapshot 09:00 UTC once/day, ALL traders; swing per running trader
+   - telegram/format.go — strategy name on cards; multi-trader snapshot layout
+   - telegram/notifier.go — trade alerts name correct trader + strategy
+   - telegram/debuglog.go — REMOVED
+   - store/telegram_config.go — selected_trader_id (Both default *), notify/digest settings
+
+B) AI spend tracking (claw402 USDC ledger + dashboard)
+   - mcp/payment/charge_context.go (NEW) — charge metadata in context
+   - mcp/payment/x402.go, mcp/client.go — settlement hooks
+   - store/ai_charge.go — RecordWithMeta, dashboard spend queries
+   - main.go — RegisterChargeRecorder → ai_charges table
+   - trader/auto_trader_loop.go — charge context on AI cycles
+   - api/handler_ai_cost.go — /api/ai-costs, dashboard spend endpoints
+   - api/server.go — route registration
+   - web: AISpendStrip.tsx, ai-costs.ts, DataPage, TerminalDashboard updates
+
+C) Frontend build in Docker (ships dashboard AI spend UI with backend)
+   - Dockerfile.railway — builds web/ with node:20 instead of pinned ghcr frontend image
+
+D) Other (already in tree; include in same compile)
+   - kernel/engine*.go — claw402 data routing tweaks
+   - api/strategy.go, handler_vergex.go
+   - telegram/agent/agent.go — agent improvements
+   - web: CompetitionPage, LiquidationMap, AppRoutes, data API
+
+CLAW402 COST REMINDER (for Telegram users)
+------------------------------------------
+FREE (no gpt-5.6-luna spend): /start /help /traders /use /balanca /positions /notify*
+  daily snapshot, swing alerts, trade push notifications
+COSTS USDC: free-text chat (hourglass AI reply) + autopilot trading cycles
+
+PRE-DEPLOY CHECKLIST (one agent runs once)
+------------------------------------------
+[ ] git status — no surprise files from parallel agents
+[ ] git stash list — drop or merge stash@{0} pre-telegram-deploy if obsolete
+[ ] cd nofx-src && go build -o nofx.exe .
+[ ] go test ./telegram/...
+[ ] Confirm no other terminal is running railway up
+[ ] ONE deploy only:
+    cd C:\Users\GigaByte\Downloads\nofx-src
+    railway up -s nofx -y --ci
+
+POST-DEPLOY VERIFY
+------------------
+[ ] railway deployment SUCCESS
+[ ] GET https://nofx-production-fcd1.up.railway.app/health = 200
+[ ] Logs: Telegram bot @duacrypto_bot started
+[ ] /traders → Both + Autopilot + Gold with strategy names
+[ ] /notify test → all strategies snapshot
+[ ] Dashboard AI spend strip shows spent_today
+[ ] Autopilot NVDA/INTC still running
+
+COMMIT MESSAGE (when user asks to commit)
+-----------------------------------------
+deploy-duacrypto-all-strategies-v1: multi-trader Telegram picker, daily all-strategy snapshot, AI spend ledger and dashboard.

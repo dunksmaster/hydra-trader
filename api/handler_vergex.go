@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"nofx/logger"
@@ -16,7 +15,8 @@ func (s *Server) handleVergexSignalRanking(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := client.GetSignalRanking(context.Background(), vergex.Query{
+	ctx := s.chargeContextForTrader(c, "vergex-ranking")
+	data, err := client.GetSignalRanking(ctx, vergex.Query{
 		Chain:   strings.TrimSpace(c.Query("chain")),
 		LiqBand: strings.TrimSpace(c.Query("liqBand")),
 	})
@@ -40,7 +40,8 @@ func (s *Server) handleVergexSignalLab(c *gin.Context) {
 	if !ok {
 		return
 	}
-	body, err := client.GetSignalLab(context.Background(), vergex.Query{
+	ctx := s.chargeContextForTrader(c, "vergex-signal-lab")
+	body, err := client.GetSignalLab(ctx, vergex.Query{
 		MarketType: withDefault(strings.TrimSpace(c.Query("marketType")), vergex.DefaultMarketType),
 		Symbol:     strings.TrimSpace(c.Query("symbol")),
 		Chain:      strings.TrimSpace(c.Query("chain")),
@@ -59,7 +60,8 @@ func (s *Server) handleVergexCostLiquidationHeatmap(c *gin.Context) {
 	if !ok {
 		return
 	}
-	body, err := client.GetCostLiquidationHeatmap(context.Background(), vergex.Query{
+	ctx := s.chargeContextForTrader(c, "vergex-heatmap")
+	body, err := client.GetCostLiquidationHeatmap(ctx, vergex.Query{
 		MarketType: withDefault(strings.TrimSpace(c.Query("marketType")), vergex.DefaultMarketType),
 		Symbol:     strings.TrimSpace(c.Query("symbol")),
 		Chain:      strings.TrimSpace(c.Query("chain")),
@@ -86,7 +88,8 @@ func (s *Server) handleVergexFlowMarkets(c *gin.Context) {
 	window := withDefault(strings.TrimSpace(c.Query("window")), "1h")
 	limit := parsePositiveInt(c.Query("limit"), 25)
 
-	body, err := client.GetFlowMarkets(context.Background(), chain, window, limit)
+	ctx := s.chargeContextForTrader(c, "vergex-flow")
+	body, err := client.GetFlowMarkets(ctx, chain, window, limit)
 	if err != nil {
 		logger.Warnf("Vergex flow-markets failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})

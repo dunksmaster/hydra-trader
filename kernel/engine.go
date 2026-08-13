@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
+	"nofx/mcp/payment"
 	"nofx/provider/hyperliquid"
 	"nofx/provider/nofxos"
 	"nofx/provider/vergex"
@@ -190,6 +191,22 @@ type StrategyEngine struct {
 	nofxosClient       *nofxos.Client
 	vergexClient       *vergex.Client
 	vergexRankingCache map[string]*vergex.SignalRankItem
+	chargeCtx          context.Context
+}
+
+// SetChargeContext attaches Claw402 charge metadata for Vergex calls in this cycle.
+func (e *StrategyEngine) SetChargeContext(ctx context.Context) {
+	if e == nil {
+		return
+	}
+	e.chargeCtx = ctx
+}
+
+func (e *StrategyEngine) chargeContext() context.Context {
+	if e != nil && e.chargeCtx != nil {
+		return e.chargeCtx
+	}
+	return context.Background()
 }
 
 // NewStrategyEngine creates strategy execution engine.
@@ -743,7 +760,9 @@ func (e *StrategyEngine) getVergexSignalCoins(limit int, marketType, chain, liqB
 	}
 	category = strings.ToLower(strings.TrimSpace(category))
 
-	ranking, err := e.vergexClient.GetSignalRanking(context.Background(), vergex.Query{
+	ranking, err := e.vergexClient.GetSignalRanking(
+		payment.WithChargeSource(e.chargeContext(), "vergex-ranking"),
+		vergex.Query{
 		Chain:   chain,
 		LiqBand: liqBand,
 	})
@@ -753,7 +772,9 @@ func (e *StrategyEngine) getVergexSignalCoins(limit int, marketType, chain, liqB
 
 	rankedItems := vergex.FilterSignalRankingItems(ranking.Items, marketType, store.MaxCandidateCoins)
 	if len(rankedItems) == 0 && strings.TrimSpace(chain) != "" {
-		fallbackRanking, fallbackErr := e.vergexClient.GetSignalRanking(context.Background(), vergex.Query{
+		fallbackRanking, fallbackErr := e.vergexClient.GetSignalRanking(
+			payment.WithChargeSource(e.chargeContext(), "vergex-ranking"),
+			vergex.Query{
 			LiqBand: liqBand,
 		})
 		if fallbackErr == nil {
@@ -1242,8 +1263,11 @@ func (e *StrategyEngine) populateVergexDetailData(ctx context.Context, analysis 
 		err  error
 	}
 
-	run := func(name string, fetch func(context.Context, vergex.Query) (json.RawMessage, error), out chan<- endpointResult) {
-		requestCtx, cancel := context.WithTimeout(ctx, vergexDetailRequestTimeout)
+	run := func(name string, source string, fetch func(context.Context, vergex.Query) (json.RawMessage, error), out chan<- endpointResult) {
+		requestCtx, cancel := context.WithTimeout(
+			payment.WithChargeSource(ctx, source),
+			vergexDetailRequestTimeout,
+		)
 		defer cancel()
 		body, err := fetch(requestCtx, query)
 		out <- endpointResult{name: name, body: body, err: err}
@@ -1254,11 +1278,11 @@ func (e *StrategyEngine) populateVergexDetailData(ctx context.Context, analysis 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		run("signal-lab", e.fetchVergexSignalLabWithFallback, out)
+		run("signal-lab", "vergex-signal-lab", e.fetchVergexSignalLabWithFallback, out)
 	}()
 	go func() {
 		defer wg.Done()
-		run("heatmap", e.fetchVergexHeatmapWithFallback, out)
+		run("heatmap", "vergex-heatmap", e.fetchVergexHeatmapWithFallback, out)
 	}()
 	wg.Wait()
 	close(out)

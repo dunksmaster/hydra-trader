@@ -205,12 +205,13 @@ export interface VergexHeatmapResponse {
   meta?: unknown
 }
 
-function vergexDetailQuery(params: VergexDetailRequest) {
+function vergexDetailQuery(params: VergexDetailRequest, traderId?: string) {
   const query = new URLSearchParams()
   query.set('marketType', params.marketType)
   query.set('symbol', params.symbol)
   query.set('chain', params.chain || 'mainnet')
   query.set('liqBand', params.liqBand || '15')
+  if (traderId) query.set('trader_id', traderId)
   return query.toString()
 }
 
@@ -235,10 +236,11 @@ export const dataApi = {
   },
 
   async getVergexSignalLab(
-    params: VergexDetailRequest
+    params: VergexDetailRequest,
+    traderId?: string
   ): Promise<VergexSignalLabResponse> {
     const result = await httpClient.request<VergexSignalLabResponse>(
-      `${API_BASE}/vergex/signal-lab?${vergexDetailQuery(params)}`,
+      `${API_BASE}/vergex/signal-lab?${vergexDetailQuery(params, traderId)}`,
       { timeout: 90000 }
     )
     if (!result.success)
@@ -247,10 +249,11 @@ export const dataApi = {
   },
 
   async getVergexCostLiquidationHeatmap(
-    params: VergexDetailRequest
+    params: VergexDetailRequest,
+    traderId?: string
   ): Promise<VergexHeatmapResponse> {
     const result = await httpClient.request<VergexHeatmapResponse>(
-      `${API_BASE}/vergex/cost-liquidation-heatmap?${vergexDetailQuery(params)}`,
+      `${API_BASE}/vergex/cost-liquidation-heatmap?${vergexDetailQuery(params, traderId)}`,
       { timeout: 90000 }
     )
     if (!result.success)
@@ -365,10 +368,12 @@ export const dataApi = {
     chain = 'mainnet',
     window = '1h',
     limit = 25,
-    silent?: boolean
+    silent?: boolean,
+    traderId?: string
   ): Promise<FlowMarketsResponse> {
     const params = new URLSearchParams({ chain, window, limit: String(limit) })
     if (aiModelId) params.set('ai_model_id', aiModelId)
+    if (traderId) params.set('trader_id', traderId)
     const result = await httpClient.request<FlowMarketsResponse>(
       `${API_BASE}/vergex/flow-markets?${params}`,
       { silent }
@@ -382,10 +387,12 @@ export const dataApi = {
     chain = 'mainnet',
     marketType = 'all',
     limit = 25,
-    silent?: boolean
+    silent?: boolean,
+    traderId?: string
   ): Promise<SignalRankingResponse> {
     const params = new URLSearchParams({ chain, marketType, limit: String(limit) })
     if (aiModelId) params.set('ai_model_id', aiModelId)
+    if (traderId) params.set('trader_id', traderId)
     const result = await httpClient.request<SignalRankingResponse>(
       `${API_BASE}/vergex/signal-ranking?${params}`,
       { silent }

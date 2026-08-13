@@ -390,10 +390,6 @@ export function AppRoutes() {
     return <LoadingScreen />
   }
 
-  if (systemConfig && !systemConfig.initialized && !user) {
-    return <SetupPage />
-  }
-
   return (
     <>
       <LegacyHashRedirect />
@@ -458,13 +454,9 @@ export function AppRoutes() {
         <Route
           path={ROUTES.competition}
           element={
-            isAuthenticated ? (
-              <AppChrome currentPage="competition" animateContent>
-                <CompetitionPage />
-              </AppChrome>
-            ) : (
-              <LandingPage />
-            )
+            <AppChrome currentPage="competition" animateContent>
+              <CompetitionPage />
+            </AppChrome>
           }
         />
         <Route

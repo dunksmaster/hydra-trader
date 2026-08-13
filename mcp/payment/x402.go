@@ -308,6 +308,7 @@ func DoX402Request(
 					logger.Infof("✅ [%s] Payment retry succeeded on attempt %d", providerTag, attempt)
 				}
 				storeRespHeader(headerSink, resp2.Header)
+				RecordChargeFromHeader(ctx, resp2.Header)
 				return body2, nil
 			}
 
@@ -365,6 +366,7 @@ func DoX402Request(
 		return nil, fmt.Errorf("%s API error (status %d): %s", providerTag, resp.StatusCode, string(body))
 	}
 	storeRespHeader(headerSink, resp.Header)
+	RecordChargeFromHeader(ctx, resp.Header)
 	return body, nil
 }
 
@@ -523,12 +525,12 @@ func X402CallStream(c *mcp.Client, signFn X402SignFunc, tag string, systemPrompt
 
 	// Idle-timeout context: cancel() closes the underlying TCP connection,
 	// which immediately unblocks any pending resp.Body.Read().
-	ctx, cancel := context.WithCancel(context.Background())
+	streamCtx, cancel := context.WithCancel(chargeContextFromClient(c))
 	defer cancel()
 
 	c.LastCallSettledUSD = 0
 	c.LastCallUsage = nil
-	resp, err := DoX402RequestStream(ctx, c.HTTPClient, func() (*http.Request, error) {
+	resp, err := DoX402RequestStream(streamCtx, c.HTTPClient, func() (*http.Request, error) {
 		return c.Hooks.BuildRequest(c.Hooks.BuildUrl(), jsonData)
 	}, signFn, tag, c.Log)
 	if err != nil {
@@ -547,7 +549,7 @@ func X402CallStream(c *mcp.Client, signFn X402SignFunc, tag string, systemPrompt
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-streamCtx.Done():
 				return
 			case <-t.C:
 				c.Log.Warnf("⚠️  [%s] SSE idle timeout (%v), cancelling stream", tag, x402StreamIdleTimeout)
@@ -583,6 +585,7 @@ func X402CallStream(c *mcp.Client, signFn X402SignFunc, tag string, systemPrompt
 
 	if text != "" {
 		c.Log.Infof("📡 [%s] SSE stream complete, got %d chars", tag, len(text))
+		RecordChargeFromClient(chargeContextFromClient(c), c)
 		return text, nil
 	}
 
@@ -591,6 +594,7 @@ func X402CallStream(c *mcp.Client, signFn X402SignFunc, tag string, systemPrompt
 		c.Log.Infof("📡 [%s] SSE empty, trying JSON fallback on %d bytes", tag, bodyBuf.Len())
 		jsonText, jsonErr := c.Hooks.ParseMCPResponse(bodyBuf.Bytes())
 		if jsonErr == nil && jsonText != "" {
+			RecordChargeFromClient(chargeContextFromClient(c), c)
 			return jsonText, nil
 		}
 		c.Log.Warnf("⚠️  [%s] JSON fallback also failed: %v", tag, jsonErr)
@@ -628,7 +632,7 @@ func X402Call(c *mcp.Client, signFn X402SignFunc, tag string, systemPrompt, user
 
 	c.LastCallSettledUSD = 0
 	var respHeader http.Header
-	body, err := DoX402Request(context.Background(), c.HTTPClient, func() (*http.Request, error) {
+	body, err := DoX402Request(chargeContextFromClient(c), c.HTTPClient, func() (*http.Request, error) {
 		return c.Hooks.BuildRequest(c.Hooks.BuildUrl(), jsonData)
 	}, signFn, tag, c.Log, &respHeader)
 	if err != nil {

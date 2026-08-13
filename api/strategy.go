@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -637,7 +636,10 @@ func (s *Server) handleStrategyTestRun(c *gin.Context) {
 		symbols = append(symbols, c.Symbol)
 	}
 	quantDataMap := engine.FetchQuantDataBatch(symbols)
-	vergexDataMap := engine.FetchVergexDataBatch(context.Background(), symbols)
+	traderID, _ := s.resolveRunningTraderID(userID)
+	chargeCtx := s.buildChargeContext(userID, traderID, "strategy-test")
+	engine.SetChargeContext(chargeCtx)
+	vergexDataMap := engine.FetchVergexDataBatch(chargeCtx, symbols)
 
 	// Fetch OI ranking data (market-wide position changes)
 	oiRankingData := engine.FetchOIRankingData()
@@ -682,7 +684,7 @@ func (s *Server) handleStrategyTestRun(c *gin.Context) {
 
 	// If requesting real AI call
 	if req.RunRealAI && req.AIModelID != "" {
-		aiResponse, aiErr := s.runRealAITest(userID, req.AIModelID, systemPrompt, userPrompt)
+		aiResponse, aiErr := s.runRealAITest(userID, traderID, req.AIModelID, systemPrompt, userPrompt)
 		if aiErr != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"system_prompt":   systemPrompt,
@@ -722,7 +724,7 @@ func (s *Server) handleStrategyTestRun(c *gin.Context) {
 }
 
 // runRealAITest Execute real AI test call
-func (s *Server) runRealAITest(userID, modelID, systemPrompt, userPrompt string) (string, error) {
+func (s *Server) runRealAITest(userID, traderID, modelID, systemPrompt, userPrompt string) (string, error) {
 	// Get AI model configuration
 	model, err := s.store.AIModel().Get(userID, modelID)
 	if err != nil {
@@ -752,6 +754,12 @@ func (s *Server) runRealAITest(userID, modelID, systemPrompt, userPrompt string)
 		aiClient.SetAPIKey(apiKey, "", model.CustomModelName)
 	default:
 		aiClient.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
+	}
+
+	chargeCtx := s.buildChargeContext(userID, traderID, "strategy-test")
+	if embedder, ok := aiClient.(mcp.ClientEmbedder); ok {
+		embedder.BaseClient().ChargeCtx = chargeCtx
+		defer func() { embedder.BaseClient().ChargeCtx = nil }()
 	}
 
 	// Call AI API

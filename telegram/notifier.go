@@ -68,7 +68,7 @@ func handleTradeEvent(e events.TradeEvent) {
 	lang := st.TelegramConfig().GetLanguage()
 	var footer *AccountSnapshot
 	if strings.HasPrefix(e.Action, "close_") {
-		if snap, err := fetchLiveAccountSnapshot(st, apiPort); err == nil {
+		if snap, err := fetchLiveAccountSnapshotForTrader(st, apiPort, e.TraderID); err == nil {
 			footer = &snap
 		}
 	}
@@ -77,26 +77,7 @@ func handleTradeEvent(e events.TradeEvent) {
 	sendHTMLMsg(bot, chatID, text)
 }
 
-func lookupTraderName(st *store.Store, traderID string) string {
-	if traderID == "" {
-		return ""
-	}
-	traders, err := st.Trader().ListAll()
-	if err != nil {
-		return ""
-	}
-	for _, t := range traders {
-		if t.ID == traderID {
-			return t.Name
-		}
-	}
-	if len(traderID) >= 8 {
-		return traderID[:8]
-	}
-	return traderID
-}
-
-func fetchLiveAccountSnapshot(st *store.Store, apiPort int) (AccountSnapshot, error) {
+func fetchLiveAccountSnapshotForTrader(st *store.Store, apiPort int, traderID string) (AccountSnapshot, error) {
 	userID, err := resolveBotUserID(st)
 	if err != nil {
 		return AccountSnapshot{}, err
@@ -106,17 +87,12 @@ func fetchLiveAccountSnapshot(st *store.Store, apiPort int) (AccountSnapshot, er
 		return AccountSnapshot{}, err
 	}
 	client := newQuickClient(apiPort, jwt)
-	return fetchAccountSnapshot(client)
-}
-
-func resolveBotUserID(st *store.Store) (string, error) {
-	users, err := st.User().GetAll()
-	if err == nil && len(users) > 0 {
-		return users[0].ID, nil
+	tp, err := fetchTraderPortfolioByID(st, client, traderID)
+	if err != nil {
+		return AccountSnapshot{}, err
 	}
-	traders, err := st.Trader().ListAll()
-	if err == nil && len(traders) > 0 && traders[0].UserID != "" {
-		return traders[0].UserID, nil
+	if tp.FetchErr != "" {
+		return AccountSnapshot{}, fmt.Errorf("%s", tp.FetchErr)
 	}
-	return "", fmt.Errorf("no user found")
+	return tp.Snapshot, nil
 }
