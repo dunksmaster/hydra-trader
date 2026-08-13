@@ -148,9 +148,16 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 
+	// #region agent log
+	logger.Infof("[DBG-e70047] hypothesis=H1 location=handler_user.go:handleLogin message=login_attempt data=%q", req.Email)
+	// #endregion
+
 	// Get user information
 	user, err := s.store.User().GetByEmail(req.Email)
 	if err != nil {
+		// #region agent log
+		logger.Infof("[DBG-e70047] hypothesis=H1 location=handler_user.go:handleLogin message=login_fail reason=unknown_email data=%q", req.Email)
+		// #endregion
 		// Perform a dummy comparison so the response time does not reveal
 		// whether the email exists (anti user-enumeration), then fail uniformly.
 		auth.CheckPassword(req.Password, dummyPasswordHash)
@@ -160,6 +167,9 @@ func (s *Server) handleLogin(c *gin.Context) {
 
 	// Verify password
 	if !auth.CheckPassword(req.Password, user.PasswordHash) {
+		// #region agent log
+		logger.Infof("[DBG-e70047] hypothesis=H1 location=handler_user.go:handleLogin message=login_fail reason=bad_password user_id=%q email=%q", user.ID, user.Email)
+		// #endregion
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Email or password incorrect"})
 		return
 	}
@@ -177,6 +187,9 @@ func (s *Server) handleLogin(c *gin.Context) {
 		"email":   user.Email,
 		"message": "Login successful",
 	})
+	// #region agent log
+	logger.Infof("[DBG-e70047] hypothesis=H2 location=handler_user.go:handleLogin message=login_ok user_id=%q email=%q", user.ID, user.Email)
+	// #endregion
 }
 
 // handleChangePassword changes the password for the currently authenticated user.

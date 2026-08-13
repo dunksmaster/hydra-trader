@@ -28,7 +28,7 @@ export default function HeaderBar({
   user,
   onLogout,
   onPageChange,
-  onLoginRequired,
+  onLoginRequired: _onLoginRequired,
 }: HeaderBarProps) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -41,6 +41,11 @@ export default function HeaderBar({
 
   const navigateInApp = (path: string) => {
     navigate(path)
+  }
+
+  const redirectToLogin = (returnPath: string) => {
+    sessionStorage.setItem('returnUrl', returnPath)
+    navigateInApp(ROUTES.login)
   }
 
   // Close dropdown when clicking outside
@@ -156,9 +161,8 @@ export default function HeaderBar({
                 ]
 
                 const handleNavClick = (tab: (typeof navTabs)[0]) => {
-                  // If requires auth and not logged in, show login prompt
                   if (tab.requiresAuth && !isLoggedIn) {
-                    onLoginRequired?.(tab.label)
+                    redirectToLogin(tab.path)
                     return
                   }
                   // Navigate normally
@@ -440,7 +444,7 @@ export default function HeaderBar({
 
                   const handleMobileNavClick = (tab: (typeof navTabs)[0]) => {
                     if (tab.requiresAuth && !isLoggedIn) {
-                      onLoginRequired?.(tab.label)
+                      redirectToLogin(tab.path)
                       setMobileMenuOpen(false)
                       return
                     }

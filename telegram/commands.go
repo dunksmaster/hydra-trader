@@ -68,6 +68,9 @@ func handleQuickCommand(bot *tgbotapi.BotAPI, chatID int64, cmd string, st *stor
 		}
 		sendTradersPicker(bot, chatID, st, lang, newQuickClient(apiPort, jwt))
 		return
+	case "weblogin", "web":
+		handleWebLoginCommand(bot, chatID, st, botUserID)
+		return
 	}
 
 	jwt, err := agent.GenerateBotToken(botUserID)
@@ -117,7 +120,7 @@ func isQuickCommand(text string) bool {
 	base := normalizeQuickCommand(fields[0])
 	switch base {
 	case "balance", "balanca", "balanc", "positions", "pozicione", "pozicionet", "pos",
-		"traders", "tregtar", "notify", "njoftimet", "njoftime", "use":
+		"traders", "tregtar", "notify", "njoftimet", "njoftime", "use", "weblogin", "web":
 		return true
 	}
 	return false
@@ -132,6 +135,10 @@ func matchNLQuickIntent(text string) string {
 		return ""
 	}
 	switch {
+	case containsAny(norm,
+		"web login", "login to dashboard", "open dashboard", "sign in", "weblogin",
+	):
+		return "weblogin"
 	case containsAny(norm,
 		"show my positions", "show positions", "my positions", "open positions",
 		"what are my positions", "what's my positions", "list my positions",

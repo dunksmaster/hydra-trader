@@ -34,6 +34,7 @@ interface AuthContextType {
     mode?: UserMode
   ) => Promise<{ success: boolean; message?: string }>
   logout: () => void
+  loginWithToken: (token: string) => boolean
   isLoading: boolean
 }
 
@@ -94,6 +95,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  const parseTokenUser = (authToken: string): User | null => {
+    try {
+      const parts = authToken.split('.')
+      if (parts.length !== 3) return null
+      const payload = JSON.parse(
+        atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))
+      ) as { user_id?: string; email?: string; exp?: number }
+      if (!payload.user_id || !payload.email) return null
+      if (payload.exp && payload.exp * 1000 < Date.now()) return null
+      return { id: payload.user_id, email: payload.email }
+    } catch {
+      return null
+    }
+  }
+
+  const loginWithToken = (authToken: string): boolean => {
+    const userInfo = parseTokenUser(authToken)
+    if (!userInfo) return false
+    handlePostAuthSuccess(authToken, userInfo)
+    return true
+  }
+
   const handlePostAuthSuccess = (
     authToken: string,
     userInfo: User,
@@ -120,6 +143,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     navigate(nextPath)
+    // #region agent log
+    fetch('http://127.0.0.1:7776/ingest/c66f92c8-2d4b-4a06-b990-d87fc4f644cc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e70047'},body:JSON.stringify({sessionId:'e70047',hypothesisId:'H2',location:'AuthContext.tsx:handlePostAuthSuccess',message:'auth_session_set',data:{userId:userInfo.id,nextPath},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
   }
 
   const login = async (email: string, password: string, mode?: UserMode) => {
@@ -286,6 +312,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginAdmin,
         register,
         logout,
+        loginWithToken,
         isLoading,
       }}
     >

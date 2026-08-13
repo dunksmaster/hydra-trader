@@ -211,6 +211,25 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 			continue
 		}
 
+		// ── /weblogin — magic link for bound Telegram user ───────────────────
+		if base := normalizeQuickCommand(text); base == "weblogin" || base == "web" {
+			if allowedChatID != 0 && chatID != allowedChatID {
+				sendMsg(bot, chatID, "Unauthorized.")
+				continue
+			}
+			if allowedChatID == 0 {
+				sendMsg(bot, chatID, "Send /start first.")
+				continue
+			}
+			resolveBotUser()
+			if botUserID == "" {
+				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
+				continue
+			}
+			handleWebLoginCommand(bot, chatID, st, botUserID)
+			continue
+		}
+
 		// ── Quick commands (no AI) ───────────────────────────────────────────
 		if isQuickCommand(text) {
 			if allowedChatID != 0 && chatID != allowedChatID {
@@ -348,6 +367,7 @@ func queryKeyboard(lang string) tgbotapi.ReplyKeyboardMarkup {
 		Keyboard: [][]tgbotapi.KeyboardButton{
 			{{Text: "Balanca"}, {Text: "Pozicionet"}},
 			{{Text: "Tregtarët"}, {Text: "Njoftime"}},
+			{{Text: "Web login"}},
 		},
 		ResizeKeyboard: true,
 	}
@@ -390,6 +410,7 @@ func registerBotCommands(bot *tgbotapi.BotAPI) {
 		{Command: "use", Description: "Switch trader (1, 2, all)"},
 		{Command: "notify", Description: "Alerts on/off/test"},
 		{Command: "lang", Description: "Change language"},
+		{Command: "weblogin", Description: "Sign in to web dashboard"},
 		{Command: "help", Description: "All commands"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(cmds...)

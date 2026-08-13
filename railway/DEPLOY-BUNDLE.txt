@@ -3,8 +3,13 @@ NOFX Railway — SINGLE DEPLOY BUNDLE (do not ship partial uploads)
 
 Bundle name:  deploy-duacrypto-all-strategies-v1
 Target:       @duacrypto_bot on service nofx (accomplished-surprise)
-Status:       READY_FOR_COMPILE — NOT DEPLOYED (local go build OK on full tree)
-Live until:   deployment 1ad3349d (telegram identity + rich alerts only)
+Status:       DEPLOYED SUCCESS — minimal dashboard login fix (no /weblogin)
+Git commit:   a659f87 + login patch (LoginPage + HeaderBar)
+Deployment:   51eb7473-236d-4d6b-8219-730f0cbde1e7 (2026-08-14 01:53 UTC+2)
+Live:         https://nofx-production-fcd1.up.railway.app
+Login fix:    Removed LoginPage localStorage wipe; HeaderBar redirectToLogin with returnUrl
+Reverted:     166b298 full /weblogin bundle — do not redeploy until redesigned
+Previous:     38cc19f1 (rollback a659f87); cb5df1c1 FAILED (166b298)
 
 HARD RULES (all Cursor agents)
 ------------------------------

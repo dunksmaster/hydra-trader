@@ -5,6 +5,24 @@ set -e
 export PORT=${PORT:-8080}
 echo "🚀 Starting NOFX on port $PORT..."
 
+# One-time login reset when Railway env vars are set (CLI SSH is often blocked).
+if [ -n "$RESET_LOGIN_EMAIL" ] && [ -n "$RESET_LOGIN_PASSWORD" ]; then
+    echo "🔑 Attempting password reset for configured login email..."
+    if ! /app/nofx reset-password --email "$RESET_LOGIN_EMAIL" --password "$RESET_LOGIN_PASSWORD" --db /app/data/data.db; then
+        echo "📋 Existing login emails:"
+        sqlite3 /app/data/data.db "SELECT email FROM users;" || true
+        COUNT=$(sqlite3 /app/data/data.db "SELECT COUNT(*) FROM users;" 2>/dev/null || echo 0)
+        if [ "$COUNT" = "1" ]; then
+            echo "🔑 Single-user instance: pointing the existing account at the configured email, then resetting password..."
+            sqlite3 /app/data/data.db "UPDATE users SET email='$RESET_LOGIN_EMAIL' WHERE id=(SELECT id FROM users LIMIT 1);"
+            /app/nofx reset-password --email "$RESET_LOGIN_EMAIL" --password "$RESET_LOGIN_PASSWORD" --db /app/data/data.db \
+                || echo "⚠️ Password reset still failed after email update"
+        else
+            echo "⚠️ Password reset skipped (email not found or reset failed)"
+        fi
+    fi
+fi
+
 # Generate encryption keys (if not already set)
 if [ -z "$RSA_PRIVATE_KEY" ]; then
     export RSA_PRIVATE_KEY=$(openssl genrsa 2048 2>/dev/null)

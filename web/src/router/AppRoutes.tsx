@@ -12,6 +12,7 @@ import {
 import HeaderBar from '../components/common/HeaderBar'
 import { SiteFooter } from '../components/common/SiteFooter'
 import { LoginRequiredOverlay } from '../components/auth/LoginRequiredOverlay'
+import { AuthCallbackPage } from '../components/auth/AuthCallbackPage'
 import { LoginPage } from '../components/auth/LoginPage'
 import { RegisterPage } from '../components/auth/RegisterPage'
 import { ResetPasswordPage } from '../components/auth/ResetPasswordPage'
@@ -396,6 +397,7 @@ export function AppRoutes() {
       <Routes>
         <Route path={ROUTES.home} element={<LandingPage />} />
         <Route path={ROUTES.login} element={<LoginPage />} />
+        <Route path={ROUTES.authCallback} element={<AuthCallbackPage />} />
         <Route path={ROUTES.register} element={<RegisterPage />} />
         <Route path={ROUTES.resetPassword} element={<ResetPasswordPage />} />
         <Route

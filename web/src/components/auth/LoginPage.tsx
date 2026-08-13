@@ -21,12 +21,6 @@ export function LoginPage() {
   )
 
   useEffect(() => {
-    localStorage.removeItem('auth_token')
-    localStorage.removeItem('auth_user')
-    localStorage.removeItem('user_id')
-  }, [])
-
-  useEffect(() => {
     if (sessionStorage.getItem('from401') === 'true') {
       const id = toast.warning(t('sessionExpired', language), {
         duration: Infinity,

@@ -17,6 +17,7 @@ export const ROUTES = {
   welcome: '/welcome',
   faq: '/faq',
   resetPassword: '/reset-password',
+  authCallback: '/auth/callback',
   settings: '/settings',
   data: '/data',
   competition: '/competition',
