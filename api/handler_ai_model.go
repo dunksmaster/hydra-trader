@@ -242,9 +242,18 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 
 // handleGetSupportedModels Get list of AI models supported by the system
 func (s *Server) handleGetSupportedModels(c *gin.Context) {
-	// Return static list of supported AI models with default versions
+	// Return static list of supported AI models with default versions.
+	// defaultModel values must stay in sync with mcp/provider/* defaults.
 	supportedModels := []map[string]interface{}{
 		{"id": "claw402", "name": "Claw402 (Base USDC)", "provider": "claw402", "defaultModel": "gpt-5.6"},
+		{"id": "claude", "name": "Claude (Anthropic)", "provider": "claude", "defaultModel": "claude-opus-4-6"},
+		{"id": "openai", "name": "OpenAI", "provider": "openai", "defaultModel": "gpt-5.4"},
+		{"id": "deepseek", "name": "DeepSeek", "provider": "deepseek", "defaultModel": "deepseek-chat"},
+		{"id": "gemini", "name": "Google Gemini", "provider": "gemini", "defaultModel": "gemini-3.1-pro"},
+		{"id": "grok", "name": "xAI Grok", "provider": "grok", "defaultModel": "grok-3-latest"},
+		{"id": "kimi", "name": "Moonshot Kimi", "provider": "kimi", "defaultModel": "moonshot-v1-auto"},
+		{"id": "qwen", "name": "Alibaba Qwen", "provider": "qwen", "defaultModel": "qwen3-max"},
+		{"id": "minimax", "name": "MiniMax", "provider": "minimax", "defaultModel": "MiniMax-M2.7"},
 	}
 
 	c.JSON(http.StatusOK, supportedModels)

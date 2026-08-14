@@ -11,6 +11,7 @@ import {
   CLAW402_MODELS,
   DEFAULT_CLAW402_MODEL,
   AI_PROVIDER_CONFIG,
+  getDefaultModelNameForProvider,
   getShortName,
 } from './model-constants'
 
@@ -63,21 +64,25 @@ export function ModelConfigModal({
     configuredModel?.has_api_key || configuredModel?.apiKey
   )
 
+  const isClaw402Model = (model?: AIModel | null) =>
+    model?.provider === 'claw402' || model?.id === 'claw402'
+
+  const defaultModelNameFor = (model?: AIModel | null) => {
+    if (!model) return ''
+    if (isClaw402Model(model)) return DEFAULT_CLAW402_MODEL
+    const provider = model.provider || model.id
+    return getDefaultModelNameForProvider(provider)
+  }
+
   useEffect(() => {
     if (editingModelId && selectedModel) {
       setApiKey(selectedModel.apiKey || '')
       setBaseUrl(selectedModel.customApiUrl || '')
-      const isClaw402 =
-        selectedModel.provider === 'claw402' || selectedModel.id === 'claw402'
       setModelName(
-        selectedModel.customModelName ||
-          (isClaw402 ? DEFAULT_CLAW402_MODEL : '')
+        selectedModel.customModelName || defaultModelNameFor(selectedModel)
       )
     }
   }, [editingModelId, selectedModel])
-
-  const isClaw402Model = (model?: AIModel | null) =>
-    model?.provider === 'claw402' || model?.id === 'claw402'
 
   const resolvedModelNameForSave = () => {
     if (isClaw402Model(selectedModel)) {
@@ -88,6 +93,12 @@ export function ModelConfigModal({
 
   const handleSelectModel = (modelId: string) => {
     setSelectedModelId(modelId)
+    const template = allModels?.find((m) => m.id === modelId)
+    const configured = configuredModels?.find((m) => m.id === modelId)
+    const model = template || configured
+    setModelName(configured?.customModelName || defaultModelNameFor(model))
+    setApiKey('')
+    setBaseUrl('')
     setCurrentStep(1)
   }
 

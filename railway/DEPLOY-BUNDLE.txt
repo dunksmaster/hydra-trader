@@ -3,13 +3,15 @@ NOFX Railway — SINGLE DEPLOY BUNDLE (do not ship partial uploads)
 
 Bundle name:  deploy-duacrypto-all-strategies-v1
 Target:       @duacrypto_bot on service nofx (accomplished-surprise)
-Status:       DEPLOYED SUCCESS — minimal dashboard login fix (no /weblogin)
-Git commit:   a659f87 + login patch (LoginPage + HeaderBar)
-Deployment:   51eb7473-236d-4d6b-8219-730f0cbde1e7 (2026-08-14 01:53 UTC+2)
+Status:       DEPLOYED SUCCESS — native AI providers (Claude + own API key) in Add/Edit Model picker
+Git commit:   cursor/owner-account-repair branch + native provider picker
+Deployment:   43e49863-1878-4664-9737-df74c9e494f7 (2026-08-14 09:32 UTC+2)
+Previous:     fe16f897 Vergex x402 + wallet fallback; a9856509 strategy click fixes
 Live:         https://nofx-production-fcd1.up.railway.app
+Native models: GET /api/supported-models now lists claw402 + claude/openai/deepseek/gemini/grok/kimi/qwen/minimax
+Strategy fix: x402 payment_retry_suppressed → wait + fresh 402 challenge; stale ai_model_id wallet fallback
 Login fix:    Removed LoginPage localStorage wipe; HeaderBar redirectToLogin with returnUrl
 Reverted:     166b298 full /weblogin bundle — do not redeploy until redesigned
-Previous:     38cc19f1 (rollback a659f87); cb5df1c1 FAILED (166b298)
 
 HARD RULES (all Cursor agents)
 ------------------------------

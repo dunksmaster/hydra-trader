@@ -55,12 +55,57 @@ export const CLAW402_MODELS: Claw402Model[] = [
 ]
 
 // AI Provider configuration - default models and API links
+// defaultModel must stay in sync with mcp/provider/* and api/handler_ai_model.go
 export const AI_PROVIDER_CONFIG: Record<string, AIProviderConfig> = {
   claw402: {
     defaultModel: DEFAULT_CLAW402_MODEL,
     apiUrl: 'https://claw402.ai',
     apiName: 'Claw402',
   },
+  claude: {
+    defaultModel: 'claude-opus-4-6',
+    apiUrl: 'https://console.anthropic.com/settings/keys',
+    apiName: 'Anthropic',
+  },
+  openai: {
+    defaultModel: 'gpt-5.4',
+    apiUrl: 'https://platform.openai.com/api-keys',
+    apiName: 'OpenAI',
+  },
+  deepseek: {
+    defaultModel: 'deepseek-chat',
+    apiUrl: 'https://platform.deepseek.com/api_keys',
+    apiName: 'DeepSeek',
+  },
+  gemini: {
+    defaultModel: 'gemini-3.1-pro',
+    apiUrl: 'https://aistudio.google.com/apikey',
+    apiName: 'Google AI',
+  },
+  grok: {
+    defaultModel: 'grok-3-latest',
+    apiUrl: 'https://console.x.ai/',
+    apiName: 'xAI',
+  },
+  kimi: {
+    defaultModel: 'moonshot-v1-auto',
+    apiUrl: 'https://platform.moonshot.ai/console/api-keys',
+    apiName: 'Moonshot',
+  },
+  qwen: {
+    defaultModel: 'qwen3-max',
+    apiUrl: 'https://dashscope.console.aliyun.com/apiKey',
+    apiName: 'Alibaba DashScope',
+  },
+  minimax: {
+    defaultModel: 'MiniMax-M2.7',
+    apiUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+    apiName: 'MiniMax',
+  },
+}
+
+export function getDefaultModelNameForProvider(provider: string): string {
+  return AI_PROVIDER_CONFIG[provider]?.defaultModel || ''
 }
 
 // Helper function to get exchange display name from exchange ID (UUID)
