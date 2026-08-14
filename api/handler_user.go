@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -148,16 +149,9 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 
-	// #region agent log
-	logger.Infof("[DBG-e70047] hypothesis=H1 location=handler_user.go:handleLogin message=login_attempt data=%q", req.Email)
-	// #endregion
-
 	// Get user information
 	user, err := s.store.User().GetByEmail(req.Email)
 	if err != nil {
-		// #region agent log
-		logger.Infof("[DBG-e70047] hypothesis=H1 location=handler_user.go:handleLogin message=login_fail reason=unknown_email data=%q", req.Email)
-		// #endregion
 		// Perform a dummy comparison so the response time does not reveal
 		// whether the email exists (anti user-enumeration), then fail uniformly.
 		auth.CheckPassword(req.Password, dummyPasswordHash)
@@ -167,15 +161,17 @@ func (s *Server) handleLogin(c *gin.Context) {
 
 	// Verify password
 	if !auth.CheckPassword(req.Password, user.PasswordHash) {
-		// #region agent log
-		logger.Infof("[DBG-e70047] hypothesis=H1 location=handler_user.go:handleLogin message=login_fail reason=bad_password user_id=%q email=%q", user.ID, user.Email)
-		// #endregion
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Email or password incorrect"})
 		return
 	}
 
-	// Issue token directly after password verification.
-	token, err := auth.GenerateJWT(user.ID, user.Email)
+	loginUser, err := s.resolveLoginUser(user)
+	if err != nil {
+		SafeInternalError(c, "Login routing failed", err)
+		return
+	}
+
+	token, err := auth.GenerateJWT(loginUser.ID, loginUser.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
@@ -183,13 +179,57 @@ func (s *Server) handleLogin(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":   token,
-		"user_id": user.ID,
-		"email":   user.Email,
+		"user_id": loginUser.ID,
+		"email":   loginUser.Email,
 		"message": "Login successful",
 	})
-	// #region agent log
-	logger.Infof("[DBG-e70047] hypothesis=H2 location=handler_user.go:handleLogin message=login_ok user_id=%q email=%q", user.ID, user.Email)
-	// #endregion
+}
+
+// resolveLoginUser maps email/password logins onto the configured Telegram owner
+// when this deployment is single-tenant (owner has traders, caller logged into a
+// duplicate user row created before owner repair). Without this, the dashboard
+// loads with empty equity/positions because traders belong to owner_user_id.
+func (s *Server) resolveLoginUser(authenticated *store.User) (*store.User, error) {
+	ownerID := strings.TrimSpace(os.Getenv("TELEGRAM_OWNER_USER_ID"))
+	if ownerID == "" || authenticated.ID == ownerID {
+		return authenticated, nil
+	}
+
+	ownerTraders, err := s.store.Trader().List(ownerID)
+	if err != nil || len(ownerTraders) == 0 {
+		return authenticated, nil
+	}
+
+	owner, err := s.store.User().GetByID(ownerID)
+	if err != nil {
+		return authenticated, nil
+	}
+
+	if err := s.store.User().UpdatePassword(ownerID, authenticated.PasswordHash); err != nil {
+		logger.Warnf("Failed to sync login password to owner %s: %v", ownerID, err)
+	}
+	if email := strings.TrimSpace(authenticated.Email); email != "" && !strings.EqualFold(owner.Email, email) {
+		if err := s.store.User().UpdateEmail(ownerID, email); err != nil {
+			logger.Warnf("Failed to sync login email to owner %s: %v", ownerID, err)
+		}
+	}
+
+	if authenticated.ID != ownerID {
+		retiredEmail := fmt.Sprintf(
+			"merged-%s@deprecated.local",
+			strings.ReplaceAll(authenticated.ID, "-", "")[:12],
+		)
+		if err := s.store.User().UpdateEmail(authenticated.ID, retiredEmail); err != nil {
+			logger.Warnf("Failed to retire duplicate login row %s: %v", authenticated.ID, err)
+		}
+	}
+
+	owner, err = s.store.User().GetByID(ownerID)
+	if err != nil {
+		return authenticated, nil
+	}
+	logger.Infof("✓ Login routed to owner account %s (was %s)", ownerID, authenticated.ID)
+	return owner, nil
 }
 
 // handleChangePassword changes the password for the currently authenticated user.

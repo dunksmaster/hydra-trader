@@ -112,6 +112,14 @@ func (s *UserStore) UpdatePassword(userID, passwordHash string) error {
 	}).Error
 }
 
+// UpdateEmail changes the login email for a user row.
+func (s *UserStore) UpdateEmail(userID, email string) error {
+	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		"email":      email,
+		"updated_at": time.Now().UTC(),
+	}).Error
+}
+
 // DeleteAll deletes all users (reset system to uninitialized state)
 func (s *UserStore) DeleteAll() error {
 	return s.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&User{}).Error

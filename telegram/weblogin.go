@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"nofx/auth"
-	"nofx/logger"
 	"nofx/store"
 	"os"
 	"strings"
@@ -42,8 +41,5 @@ func handleWebLoginCommand(bot *tgbotapi.BotAPI, chatID int64, st *store.Store, 
 		url.QueryEscape(token),
 		url.QueryEscape("/dashboard"),
 	)
-	// #region agent log
-	logger.Infof("[DBG-e70047] hypothesis=H3 location=weblogin.go:handleWebLoginCommand message=weblogin_link_created user_id=%q", botUserID)
-	// #endregion
 	sendMsg(bot, chatID, "Tap to open your NOFX dashboard (valid 7 days):\n\n"+link)
 }

@@ -213,6 +213,22 @@ func (s *ExchangeStore) GetByID(userID, id string) (*Exchange, error) {
 	return &exchange, nil
 }
 
+// GetByIDAny gets an exchange by UUID without scoping to a user.
+func (s *ExchangeStore) GetByIDAny(id string) (*Exchange, error) {
+	var exchange Exchange
+	err := s.db.Where("id = ?", id).First(&exchange).Error
+	if err != nil {
+		return nil, err
+	}
+	return &exchange, nil
+}
+
+// AdoptExchange re-assigns an existing exchange to a new user.
+func (s *ExchangeStore) AdoptExchange(id, newUserID string) error {
+	return s.db.Model(&Exchange{}).Where("id = ?", id).
+		Update("user_id", newUserID).Error
+}
+
 // getExchangeNameAndType returns the display name and type for an exchange type
 func getExchangeNameAndType(exchangeType string) (name string, typ string) {
 	switch exchangeType {

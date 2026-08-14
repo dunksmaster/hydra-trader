@@ -1149,6 +1149,22 @@ func (s *StrategyStore) Get(userID, id string) (*Strategy, error) {
 	return &st, nil
 }
 
+// GetByIDAny gets a strategy by ID without scoping to a user.
+func (s *StrategyStore) GetByIDAny(id string) (*Strategy, error) {
+	var st Strategy
+	err := s.db.Where("id = ?", id).First(&st).Error
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+// AdoptStrategy re-assigns an existing strategy to a new user.
+func (s *StrategyStore) AdoptStrategy(id, newUserID string) error {
+	return s.db.Model(&Strategy{}).Where("id = ?", id).
+		Update("user_id", newUserID).Error
+}
+
 // GetActive get user's currently active strategy
 func (s *StrategyStore) GetActive(userID string) (*Strategy, error) {
 	var st Strategy

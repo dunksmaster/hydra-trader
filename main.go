@@ -127,6 +127,10 @@ func main() {
 	// Create TraderManager
 	traderManager := manager.NewTraderManager()
 
+	if err := st.RepairOwnerAccount(); err != nil {
+		logger.Fatalf("❌ Failed to repair owner account: %v", err)
+	}
+
 	// Load all traders from database to memory (may auto-start traders with IsRunning=true)
 	if err := traderManager.LoadTradersFromStore(st); err != nil {
 		logger.Fatalf("❌ Failed to load traders: %v", err)
