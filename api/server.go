@@ -468,11 +468,16 @@ func (s *Server) handleGetSystemConfig(c *gin.Context) {
 	userCount, _ := s.store.User().Count()
 	traders, _ := s.store.Trader().ListAll()
 	initialized := userCount > 0 || len(traders) > 0
-	c.JSON(http.StatusOK, gin.H{
+	ownerID := strings.TrimSpace(os.Getenv("TELEGRAM_OWNER_USER_ID"))
+	resp := gin.H{
 		"initialized":      initialized,
 		"btc_eth_leverage": 10,
 		"altcoin_leverage": 5,
-	})
+	}
+	if ownerID != "" {
+		resp["owner_user_id"] = ownerID
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // handleGetServerIP Get server IP address (for whitelist configuration)

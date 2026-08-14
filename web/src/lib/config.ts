@@ -1,6 +1,7 @@
 export interface SystemConfig {
   initialized: boolean
   beta_mode?: boolean
+  owner_user_id?: string
 }
 
 let configPromise: Promise<SystemConfig> | null = null

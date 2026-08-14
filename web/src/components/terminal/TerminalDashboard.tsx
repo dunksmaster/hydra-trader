@@ -33,6 +33,7 @@ const CRYPTO_MAJORS = new Set([
 const ROW1_H = 500
 import { FlowMarkets } from './FlowMarkets'
 import { AISpendStrip } from './AISpendStrip'
+import { OwnerAccountBanner } from '../common/OwnerAccountBanner'
 import './terminal.css'
 
 interface TerminalDashboardProps {
@@ -375,6 +376,9 @@ export function TerminalDashboard({
           navSlot,
         )}
       <div className="tm-box" style={{ maxWidth: 1280, margin: '0 auto', border: 'none' }}>
+        <div style={{ padding: '8px 14px 0' }}>
+          <OwnerAccountBanner />
+        </div>
         {/* runtime health banner — AI fee wallet dry / safe mode would otherwise
             only be visible in server logs while the bot silently idles */}
         {!on && status && (status.safe_mode || status.ai_wallet_status === 'empty' || status.ai_wallet_status === 'low') && (

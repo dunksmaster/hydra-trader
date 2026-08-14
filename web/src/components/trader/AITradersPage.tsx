@@ -21,6 +21,7 @@ import { ExchangeConfigModal } from './ExchangeConfigModal'
 import { TelegramConfigModal } from './TelegramConfigModal'
 import { ModelConfigModal } from './ModelConfigModal'
 import { ConfigStatusGrid } from './ConfigStatusGrid'
+import { OwnerAccountBanner } from '../common/OwnerAccountBanner'
 import { TradersList } from './TradersList'
 import { AutopilotLaunchPanel } from './AutopilotLaunchPanel'
 import { Bot, Plus, MessageCircle } from 'lucide-react'
@@ -744,6 +745,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   return (
     <DeepVoidBackground className="py-8" disableAnimation>
       <div className="w-full px-4 md:px-8 space-y-8 animate-fade-in">
+        <OwnerAccountBanner />
         {/* Header - Terminal Style */}
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-nofx-gold/20 pb-6">
           <div className="flex items-center gap-4">
