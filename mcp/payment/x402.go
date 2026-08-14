@@ -668,16 +668,8 @@ func X402CallFull(c *mcp.Client, signFn X402SignFunc, tag string, req *mcp.Reque
 		return nil, err
 	}
 	captureSettledUSD(c, respHeader)
-	// #region agent log
-	c.Log.Infof("[DBG-e70047] {\"sessionId\":\"e70047\",\"hypothesisId\":\"H5\",\"location\":\"x402.go:X402CallFull\",\"message\":\"response body\",\"data\":{\"url\":%q,\"len\":%d,\"prefix\":%q}}",
-		c.BaseURL, len(body), mcp.TruncBytes(body, 100))
-	// #endregion
 	resp, parseErr := mcp.ParseResponseBodyFull(c.Hooks, body)
 	if parseErr != nil {
-		// #region agent log
-		c.Log.Errorf("[DBG-e70047] {\"sessionId\":\"e70047\",\"hypothesisId\":\"H5\",\"location\":\"x402.go:X402CallFull\",\"message\":\"parse failed\",\"data\":{\"len\":%d,\"err\":%q,\"prefix\":%q}}",
-			len(body), parseErr.Error(), mcp.TruncBytes(body, 120))
-		// #endregion
 		return nil, parseErr
 	}
 	return resp, nil

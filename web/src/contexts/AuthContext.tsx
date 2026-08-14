@@ -136,16 +136,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(userInfo)
     })
 
+    const previousUserId = localStorage.getItem('user_id')
+    const userChanged =
+      Boolean(previousUserId) && previousUserId !== userInfo.id
+
     const returnUrl = sessionStorage.getItem('returnUrl')
-    const nextPath = returnUrl || getPostAuthPath(mode)
+    let nextPath = returnUrl || getPostAuthPath(mode)
     if (returnUrl) {
       sessionStorage.removeItem('returnUrl')
     }
+    if (userChanged) {
+      try {
+        const url = new URL(nextPath, window.location.origin)
+        url.searchParams.delete('trader')
+        nextPath = `${url.pathname}${url.search}` || getPostAuthPath(mode)
+      } catch {
+        nextPath = getPostAuthPath(mode)
+      }
+    }
 
     navigate(nextPath)
-    // #region agent log
-    fetch('http://127.0.0.1:7776/ingest/c66f92c8-2d4b-4a06-b990-d87fc4f644cc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e70047'},body:JSON.stringify({sessionId:'e70047',hypothesisId:'H2',location:'AuthContext.tsx:handlePostAuthSuccess',message:'auth_session_set',data:{userId:userInfo.id,nextPath},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
   }
 
   const login = async (email: string, password: string, mode?: UserMode) => {
