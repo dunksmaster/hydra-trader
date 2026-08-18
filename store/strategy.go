@@ -30,6 +30,7 @@ const (
 	MaxPositionSize   = 1000.0
 	MinConfidence     = 50
 	MaxConfidence     = 100
+	MaxHardTakeProfit = 1000.0
 )
 
 // ClampLimits enforces product-level limits on strategy config to prevent token overflow.
@@ -131,6 +132,12 @@ func (c *StrategyConfig) ClampLimits() {
 	}
 	if c.RiskControl.MinConfidence > MaxConfidence {
 		c.RiskControl.MinConfidence = MaxConfidence
+	}
+	if c.RiskControl.HardTakeProfitMarginPct < 0 {
+		c.RiskControl.HardTakeProfitMarginPct = 0
+	}
+	if c.RiskControl.HardTakeProfitMarginPct > MaxHardTakeProfit {
+		c.RiskControl.HardTakeProfitMarginPct = MaxHardTakeProfit
 	}
 }
 
@@ -932,6 +939,8 @@ type RiskControlConfig struct {
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
 	// Min AI confidence to open position (AI guided)
 	MinConfidence int `json:"min_confidence"`
+	// Force-close at this margin-based unrealized PnL percentage. Zero disables.
+	HardTakeProfitMarginPct float64 `json:"hard_take_profit_margin_pct,omitempty"`
 }
 
 // NewStrategyStore creates a new StrategyStore
@@ -1023,6 +1032,7 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			MinPositionSize:              12,  // Min 12 USDT per position (CODE ENFORCED)
 			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (AI guided)
 			MinConfidence:                78,  // Min 78% confidence (AI guided)
+			HardTakeProfitMarginPct:      15,  // Lock winners at +15% margin PnL; configurable per strategy
 		},
 	}
 

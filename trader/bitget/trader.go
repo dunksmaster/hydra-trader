@@ -30,6 +30,9 @@ const (
 	bitgetHistoryPath      = "/api/v2/mix/order/orders-history"
 	bitgetMarginModePath   = "/api/v2/mix/account/set-margin-mode"
 	bitgetPositionModePath = "/api/v2/mix/account/set-position-mode"
+	bitgetTpslOrderPath    = "/api/v2/mix/order/place-tpsl-order"
+	bitgetCancelPlanPath   = "/api/v2/mix/order/cancel-plan-order"
+	bitgetPlanPendingPath  = "/api/v2/mix/order/orders-plan-pending"
 )
 
 // BitgetTrader Bitget futures trader
@@ -58,6 +61,14 @@ type BitgetTrader struct {
 
 	// Cache duration
 	cacheDuration time.Duration
+
+	// uta is true when this API key is a Unified Trading Account (v3).
+	// Classic mix v2 returns 40085 on UTA keys.
+	accountMu sync.Mutex
+	uta       bool
+	utaKnown  bool
+	// UTA margin mode is selected per symbol and must be repeated on orders.
+	utaMarginModes map[string]string
 }
 
 // BitgetContract Bitget contract info
@@ -94,20 +105,41 @@ func NewBitgetTrader(apiKey, secretKey, passphrase string) *BitgetTrader {
 		httpClient:     httpClient,
 		cacheDuration:  15 * time.Second,
 		contractsCache: make(map[string]*BitgetContract),
+		utaMarginModes: make(map[string]string),
 	}
 
-	// Set one-way position mode (net mode)
+	trader.detectAccountMode()
+
 	if err := trader.setPositionMode(); err != nil {
 		logger.Infof("⚠️ Failed to set Bitget position mode: %v (ignore if already set)", err)
 	}
 
-	logger.Infof("🟢 [Bitget] Trader initialized")
+	if trader.useUTA() {
+		logger.Infof("🟢 [Bitget] Trader initialized (Unified Account / UTA v3)")
+	} else {
+		logger.Infof("🟢 [Bitget] Trader initialized")
+	}
 
 	return trader
 }
 
-// setPositionMode sets one-way position mode
 func (t *BitgetTrader) setPositionMode() error {
+	if t.useUTA() {
+		_, err := t.doRequest("POST", "/api/v3/account/set-hold-mode", map[string]interface{}{
+			"holdMode": "one_way_mode",
+		})
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "same") ||
+				strings.Contains(strings.ToLower(err.Error()), "already") ||
+				strings.Contains(strings.ToLower(err.Error()), "position") {
+				return nil
+			}
+			return err
+		}
+		logger.Infof("  ✓ Bitget UTA account switched to one-way position mode")
+		return nil
+	}
+
 	body := map[string]interface{}{
 		"productType": "USDT-FUTURES",
 		"posMode":     "one_way_mode",
@@ -115,6 +147,10 @@ func (t *BitgetTrader) setPositionMode() error {
 
 	_, err := t.doRequest("POST", bitgetPositionModePath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			t.markUTA()
+			return t.setPositionMode()
+		}
 		if strings.Contains(err.Error(), "same") || strings.Contains(err.Error(), "already") {
 			return nil
 		}
@@ -183,7 +219,7 @@ func (t *BitgetTrader) doRequest(method, path string, body interface{}) ([]byte,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("locale", "en-US")
 	// Channel code only for order endpoints
-	if strings.Contains(path, "/order/") {
+	if strings.Contains(path, "/order/") || strings.Contains(path, "/api/v3/trade/") {
 		req.Header.Set("X-CHANNEL-API-CODE", "7fygt")
 	}
 
@@ -204,17 +240,41 @@ func (t *BitgetTrader) doRequest(method, path string, body interface{}) ([]byte,
 	}
 
 	if bitgetResp.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: code=%s, msg=%s", bitgetResp.Code, bitgetResp.Msg)
+		err := fmt.Errorf("Bitget API error: code=%s, msg=%s", bitgetResp.Code, bitgetResp.Msg)
+		if isBitgetClassicBlocked(err) {
+			t.markUTA()
+		}
+		return nil, err
 	}
 
 	return bitgetResp.Data, nil
 }
 
-// convertSymbol converts generic symbol to Bitget format
-// e.g., BTCUSDT -> BTCUSDT
+// convertSymbol converts generic symbol to Bitget USDT-perp format.
+// xyz:NBIS / NBIS → NBISUSDT. Never send an xyz: prefix to Bitget.
 func (t *BitgetTrader) convertSymbol(symbol string) string {
-	// Bitget uses same format as input, just ensure uppercase
-	return strings.ToUpper(symbol)
+	if native := bitgetNativeSymbol(symbol); native != "" {
+		return native
+	}
+	return strings.ToUpper(strings.TrimSpace(symbol))
+}
+
+func bitgetNativeSymbol(symbol string) string {
+	s := strings.ToUpper(strings.TrimSpace(symbol))
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "XYZ:")
+	for _, suf := range []string{"-USDC", "-USDT", "USDC", "USDT", "USD"} {
+		if strings.HasSuffix(s, suf) && len(s) > len(suf) {
+			s = strings.TrimSuffix(s, suf)
+			break
+		}
+	}
+	if s == "" || s == "ALL" {
+		return ""
+	}
+	return s + "USDT"
 }
 
 // getContract gets contract info
@@ -297,6 +357,16 @@ func (t *BitgetTrader) FormatQuantity(symbol string, quantity float64) (string, 
 	// Format according to volume precision
 	format := fmt.Sprintf("%%.%df", contract.VolumePlace)
 	return fmt.Sprintf(format, quantity), nil
+}
+
+// FormatPrice formats a trigger/limit price to the contract tick.
+func (t *BitgetTrader) FormatPrice(symbol string, price float64) string {
+	contract, err := t.getContract(symbol)
+	if err != nil || contract == nil {
+		return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.8f", price), "0"), ".")
+	}
+	format := fmt.Sprintf("%%.%df", contract.PricePlace)
+	return fmt.Sprintf(format, price)
 }
 
 // clearCache clears all caches

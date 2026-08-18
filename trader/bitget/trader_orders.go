@@ -23,8 +23,16 @@ func (t *BitgetTrader) OpenLong(symbol string, quantity float64, leverage int) (
 		logger.Infof("  ⚠️ Failed to set leverage: %v", err)
 	}
 
-	// Format quantity
 	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	if t.useUTA() {
+		logger.Infof("  📊 Bitget UTA OpenLong: symbol=%s, qty=%s, leverage=%d", symbol, qtyStr, leverage)
+		result, err := t.utaPlaceMarket(symbol, "buy", qtyStr, "no")
+		if err != nil {
+			return nil, fmt.Errorf("failed to open long position: %w", err)
+		}
+		logger.Infof("✓ Bitget opened long position successfully: %s", symbol)
+		return result, nil
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -41,6 +49,14 @@ func (t *BitgetTrader) OpenLong(symbol string, quantity float64, leverage int) (
 
 	data, err := t.doRequest("POST", bitgetOrderPath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			result, utaErr := t.utaPlaceMarket(symbol, "buy", qtyStr, "no")
+			if utaErr != nil {
+				return nil, fmt.Errorf("failed to open long position: %w", utaErr)
+			}
+			logger.Infof("✓ Bitget opened long position successfully: %s", symbol)
+			return result, nil
+		}
 		return nil, fmt.Errorf("failed to open long position: %w", err)
 	}
 
@@ -79,8 +95,16 @@ func (t *BitgetTrader) OpenShort(symbol string, quantity float64, leverage int) 
 		logger.Infof("  ⚠️ Failed to set leverage: %v", err)
 	}
 
-	// Format quantity
 	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	if t.useUTA() {
+		logger.Infof("  📊 Bitget UTA OpenShort: symbol=%s, qty=%s, leverage=%d", symbol, qtyStr, leverage)
+		result, err := t.utaPlaceMarket(symbol, "sell", qtyStr, "no")
+		if err != nil {
+			return nil, fmt.Errorf("failed to open short position: %w", err)
+		}
+		logger.Infof("✓ Bitget opened short position successfully: %s", symbol)
+		return result, nil
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -97,6 +121,14 @@ func (t *BitgetTrader) OpenShort(symbol string, quantity float64, leverage int) 
 
 	data, err := t.doRequest("POST", bitgetOrderPath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			result, utaErr := t.utaPlaceMarket(symbol, "sell", qtyStr, "no")
+			if utaErr != nil {
+				return nil, fmt.Errorf("failed to open short position: %w", utaErr)
+			}
+			logger.Infof("✓ Bitget opened short position successfully: %s", symbol)
+			return result, nil
+		}
 		return nil, fmt.Errorf("failed to open short position: %w", err)
 	}
 
@@ -145,6 +177,16 @@ func (t *BitgetTrader) CloseLong(symbol string, quantity float64) (map[string]in
 	// Format quantity
 	qtyStr, _ := t.FormatQuantity(symbol, quantity)
 
+	if t.useUTA() {
+		logger.Infof("  📊 Bitget UTA CloseLong: symbol=%s, qty=%s", symbol, qtyStr)
+		result, err := t.utaPlaceMarket(symbol, "sell", qtyStr, "yes")
+		if err != nil {
+			return nil, fmt.Errorf("failed to close long position: %w", err)
+		}
+		logger.Infof("✓ Bitget closed long position successfully: %s", symbol)
+		return result, nil
+	}
+
 	body := map[string]interface{}{
 		"symbol":      symbol,
 		"productType": "USDT-FUTURES",
@@ -161,6 +203,14 @@ func (t *BitgetTrader) CloseLong(symbol string, quantity float64) (map[string]in
 
 	data, err := t.doRequest("POST", bitgetOrderPath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			result, utaErr := t.utaPlaceMarket(symbol, "sell", qtyStr, "yes")
+			if utaErr != nil {
+				return nil, fmt.Errorf("failed to close long position: %w", utaErr)
+			}
+			logger.Infof("✓ Bitget closed long position successfully: %s", symbol)
+			return result, nil
+		}
 		return nil, fmt.Errorf("failed to close long position: %w", err)
 	}
 
@@ -213,6 +263,16 @@ func (t *BitgetTrader) CloseShort(symbol string, quantity float64) (map[string]i
 	// Format quantity
 	qtyStr, _ := t.FormatQuantity(symbol, quantity)
 
+	if t.useUTA() {
+		logger.Infof("  📊 Bitget UTA CloseShort: symbol=%s, qty=%s", symbol, qtyStr)
+		result, err := t.utaPlaceMarket(symbol, "buy", qtyStr, "yes")
+		if err != nil {
+			return nil, fmt.Errorf("failed to close short position: %w", err)
+		}
+		logger.Infof("✓ Bitget closed short position successfully: %s", symbol)
+		return result, nil
+	}
+
 	body := map[string]interface{}{
 		"symbol":      symbol,
 		"productType": "USDT-FUTURES",
@@ -229,6 +289,14 @@ func (t *BitgetTrader) CloseShort(symbol string, quantity float64) (map[string]i
 
 	data, err := t.doRequest("POST", bitgetOrderPath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			result, utaErr := t.utaPlaceMarket(symbol, "buy", qtyStr, "yes")
+			if utaErr != nil {
+				return nil, fmt.Errorf("failed to close short position: %w", utaErr)
+			}
+			logger.Infof("✓ Bitget closed short position successfully: %s", symbol)
+			return result, nil
+		}
 		return nil, fmt.Errorf("failed to close short position: %w", err)
 	}
 
@@ -252,81 +320,122 @@ func (t *BitgetTrader) CloseShort(symbol string, quantity float64) (map[string]i
 	}, nil
 }
 
-// SetStopLoss sets stop loss order
-func (t *BitgetTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
-	// Bitget V2 uses plan order for stop loss
-	symbol = t.convertSymbol(symbol)
-
-	side := "sell"
-	holdSide := "long"
-	if strings.ToUpper(positionSide) == "SHORT" {
-		side = "buy"
-		holdSide = "short"
+// bitgetHoldSide maps LONG/SHORT onto Bitget one-way TPSL holdSide.
+// The account is forced to one_way_mode; that mode rejects long/short (43011)
+// and wants buy (long) / sell (short).
+func bitgetHoldSide(positionSide string) string {
+	if strings.EqualFold(positionSide, "SHORT") {
+		return "sell"
 	}
+	return "buy"
+}
 
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+func bitgetAltHoldSide(holdSide string) string {
+	switch strings.ToLower(strings.TrimSpace(holdSide)) {
+	case "buy":
+		return "long"
+	case "sell":
+		return "short"
+	case "long":
+		return "buy"
+	case "short":
+		return "sell"
+	default:
+		return holdSide
+	}
+}
 
+// bitgetTPSLBody is the V2 place-tpsl-order payload. loss_plan/profit_plan are
+// illegal on place-plan-order (Bitget 400172) — they belong on this endpoint.
+func bitgetTPSLBody(symbol, planType, holdSide, triggerPrice, size, clientOid string) map[string]interface{} {
 	body := map[string]interface{}{
-		"planType":     "loss_plan",
+		"planType":     planType,
 		"symbol":       symbol,
 		"productType":  "USDT-FUTURES",
-		"marginMode":   "crossed",
 		"marginCoin":   "USDT",
-		"triggerPrice": fmt.Sprintf("%.8f", stopPrice),
+		"triggerPrice": triggerPrice,
 		"triggerType":  "mark_price",
-		"side":         side,
-		"tradeSide":    "close",
-		"orderType":    "market",
-		"size":         qtyStr,
+		"executePrice": "0",
 		"holdSide":     holdSide,
-		"clientOid":    genBitgetClientOid(),
+		"clientOid":    clientOid,
+	}
+	if size != "" {
+		body["size"] = size
+	}
+	return body
+}
+
+func (t *BitgetTrader) placeTPSL(symbol, planType, holdSide, triggerPrice, size string) error {
+	err := t.doTPSL(symbol, planType, holdSide, triggerPrice, size)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "holdside") {
+		return t.doTPSL(symbol, planType, bitgetAltHoldSide(holdSide), triggerPrice, size)
+	}
+	return err
+}
+
+func (t *BitgetTrader) doTPSL(symbol, planType, holdSide, triggerPrice, size string) error {
+	if t.useUTA() {
+		isStopLoss := strings.Contains(planType, "loss")
+		qty, _ := strconv.ParseFloat(size, 64)
+		price, _ := strconv.ParseFloat(triggerPrice, 64)
+		side := "LONG"
+		if holdSide == "sell" || holdSide == "short" {
+			side = "SHORT"
+		}
+		return t.utaPlaceTPSL(symbol, side, qty, price, isStopLoss)
+	}
+	_, err := t.doRequest("POST", bitgetTpslOrderPath, bitgetTPSLBody(
+		symbol, planType, holdSide, triggerPrice, size, genBitgetClientOid(),
+	))
+	if err != nil && isBitgetClassicBlocked(err) {
+		isStopLoss := strings.Contains(planType, "loss")
+		qty, _ := strconv.ParseFloat(size, 64)
+		price, _ := strconv.ParseFloat(triggerPrice, 64)
+		side := "LONG"
+		if holdSide == "sell" || holdSide == "short" {
+			side = "SHORT"
+		}
+		return t.utaPlaceTPSL(symbol, side, qty, price, isStopLoss)
+	}
+	return err
+}
+
+// SetStopLoss attaches a position stop via Bitget V2 TPSL (not a trigger plan).
+func (t *BitgetTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+	symbol = t.convertSymbol(symbol)
+	holdSide := bitgetHoldSide(positionSide)
+	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	priceStr := t.FormatPrice(symbol, stopPrice)
+
+	// pos_loss covers the whole position; loss_plan is the size-based fallback.
+	if err := t.placeTPSL(symbol, "pos_loss", holdSide, priceStr, qtyStr); err != nil {
+		if err2 := t.placeTPSL(symbol, "loss_plan", holdSide, priceStr, qtyStr); err2 != nil {
+			return fmt.Errorf("failed to set stop loss: %w", err)
+		}
+		logger.Infof("  ✓ [Bitget] Stop loss set via loss_plan: %s @ %s", symbol, priceStr)
+		return nil
 	}
 
-	_, err := t.doRequest("POST", "/api/v2/mix/order/place-plan-order", body)
-	if err != nil {
-		return fmt.Errorf("failed to set stop loss: %w", err)
-	}
-
-	logger.Infof("  ✓ [Bitget] Stop loss set: %s @ %.4f", symbol, stopPrice)
+	logger.Infof("  ✓ [Bitget] Stop loss set: %s @ %s", symbol, priceStr)
 	return nil
 }
 
-// SetTakeProfit sets take profit order
+// SetTakeProfit attaches a position take-profit via Bitget V2 TPSL.
 func (t *BitgetTrader) SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error {
-	// Bitget V2 uses plan order for take profit
 	symbol = t.convertSymbol(symbol)
-
-	side := "sell"
-	holdSide := "long"
-	if strings.ToUpper(positionSide) == "SHORT" {
-		side = "buy"
-		holdSide = "short"
-	}
-
+	holdSide := bitgetHoldSide(positionSide)
 	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	priceStr := t.FormatPrice(symbol, takeProfitPrice)
 
-	body := map[string]interface{}{
-		"planType":     "profit_plan",
-		"symbol":       symbol,
-		"productType":  "USDT-FUTURES",
-		"marginMode":   "crossed",
-		"marginCoin":   "USDT",
-		"triggerPrice": fmt.Sprintf("%.8f", takeProfitPrice),
-		"triggerType":  "mark_price",
-		"side":         side,
-		"tradeSide":    "close",
-		"orderType":    "market",
-		"size":         qtyStr,
-		"holdSide":     holdSide,
-		"clientOid":    genBitgetClientOid(),
+	if err := t.placeTPSL(symbol, "pos_profit", holdSide, priceStr, qtyStr); err != nil {
+		if err2 := t.placeTPSL(symbol, "profit_plan", holdSide, priceStr, qtyStr); err2 != nil {
+			return fmt.Errorf("failed to set take profit: %w", err)
+		}
+		logger.Infof("  ✓ [Bitget] Take profit set via profit_plan: %s @ %s", symbol, priceStr)
+		return nil
 	}
 
-	_, err := t.doRequest("POST", "/api/v2/mix/order/place-plan-order", body)
-	if err != nil {
-		return fmt.Errorf("failed to set take profit: %w", err)
-	}
-
-	logger.Infof("  ✓ [Bitget] Take profit set: %s @ %.4f", symbol, takeProfitPrice)
+	logger.Infof("  ✓ [Bitget] Take profit set: %s @ %s", symbol, priceStr)
 	return nil
 }
 
@@ -340,25 +449,63 @@ func (t *BitgetTrader) CancelTakeProfitOrders(symbol string) error {
 	return t.cancelPlanOrders(symbol, "profit_plan")
 }
 
-// cancelPlanOrders cancels plan orders
+func bitgetTPSLQueryType(planType string) string {
+	switch planType {
+	case "loss_plan", "pos_loss", "profit_plan", "pos_profit", "moving_plan":
+		return "profit_loss"
+	default:
+		return planType
+	}
+}
+
+func bitgetTPSLMatches(got, want string) bool {
+	switch want {
+	case "loss_plan", "pos_loss":
+		return got == "loss_plan" || got == "pos_loss"
+	case "profit_plan", "pos_profit":
+		return got == "profit_plan" || got == "pos_profit"
+	default:
+		return got == want || want == "profit_loss"
+	}
+}
+
+// cancelPlanOrders cancels pending TPSL / plan orders of the given type.
 func (t *BitgetTrader) cancelPlanOrders(symbol string, planType string) error {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		want := "all"
+		if strings.Contains(planType, "loss") {
+			want = "loss"
+		} else if strings.Contains(planType, "profit") {
+			want = "profit"
+		}
+		return t.utaCancelPlanOrders(symbol, want)
+	}
 
-	// Get pending plan orders
 	params := map[string]interface{}{
 		"symbol":      symbol,
 		"productType": "USDT-FUTURES",
-		"planType":    planType,
+		"planType":    bitgetTPSLQueryType(planType),
 	}
 
-	data, err := t.doRequest("GET", "/api/v2/mix/order/orders-plan-pending", params)
+	data, err := t.doRequest("GET", bitgetPlanPendingPath, params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			want := "all"
+			if strings.Contains(planType, "loss") {
+				want = "loss"
+			} else if strings.Contains(planType, "profit") {
+				want = "profit"
+			}
+			return t.utaCancelPlanOrders(symbol, want)
+		}
 		return err
 	}
 
 	var orders struct {
 		EntrustedList []struct {
-			OrderId string `json:"orderId"`
+			OrderId  string `json:"orderId"`
+			PlanType string `json:"planType"`
 		} `json:"entrustedList"`
 	}
 
@@ -366,15 +513,17 @@ func (t *BitgetTrader) cancelPlanOrders(symbol string, planType string) error {
 		return err
 	}
 
-	// Cancel each order
 	for _, order := range orders.EntrustedList {
+		if !bitgetTPSLMatches(order.PlanType, planType) {
+			continue
+		}
 		body := map[string]interface{}{
 			"symbol":      symbol,
 			"productType": "USDT-FUTURES",
 			"marginCoin":  "USDT",
 			"orderId":     order.OrderId,
 		}
-		t.doRequest("POST", "/api/v2/mix/order/cancel-plan-order", body)
+		t.doRequest("POST", bitgetCancelPlanPath, body)
 	}
 
 	return nil
@@ -383,8 +532,10 @@ func (t *BitgetTrader) cancelPlanOrders(symbol string, planType string) error {
 // CancelAllOrders cancels all pending orders
 func (t *BitgetTrader) CancelAllOrders(symbol string) error {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		return t.utaCancelAllOrders(symbol)
+	}
 
-	// Get pending orders
 	params := map[string]interface{}{
 		"symbol":      symbol,
 		"productType": "USDT-FUTURES",
@@ -392,6 +543,9 @@ func (t *BitgetTrader) CancelAllOrders(symbol string) error {
 
 	data, err := t.doRequest("GET", bitgetPendingPath, params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaCancelAllOrders(symbol)
+		}
 		return err
 	}
 
@@ -433,6 +587,9 @@ func (t *BitgetTrader) CancelStopOrders(symbol string) error {
 // GetOrderStatus gets order status
 func (t *BitgetTrader) GetOrderStatus(symbol string, orderID string) (map[string]interface{}, error) {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		return t.utaGetOrderStatus(symbol, orderID)
+	}
 
 	params := map[string]interface{}{
 		"symbol":      symbol,
@@ -442,19 +599,22 @@ func (t *BitgetTrader) GetOrderStatus(symbol string, orderID string) (map[string
 
 	data, err := t.doRequest("GET", "/api/v2/mix/order/detail", params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaGetOrderStatus(symbol, orderID)
+		}
 		return nil, fmt.Errorf("failed to get order status: %w", err)
 	}
 
 	var order struct {
-		OrderId      string `json:"orderId"`
-		State        string `json:"state"`        // filled, canceled, partially_filled, new
-		PriceAvg     string `json:"priceAvg"`     // Average fill price
-		BaseVolume   string `json:"baseVolume"`   // Filled quantity
-		Fee          string `json:"fee"`          // Fee
-		Side         string `json:"side"`
-		OrderType    string `json:"orderType"`
-		CTime        string `json:"cTime"`
-		UTime        string `json:"uTime"`
+		OrderId    string `json:"orderId"`
+		State      string `json:"state"`      // filled, canceled, partially_filled, new
+		PriceAvg   string `json:"priceAvg"`   // Average fill price
+		BaseVolume string `json:"baseVolume"` // Filled quantity
+		Fee        string `json:"fee"`        // Fee
+		Side       string `json:"side"`
+		OrderType  string `json:"orderType"`
+		CTime      string `json:"cTime"`
+		UTime      string `json:"uTime"`
 	}
 
 	if err := json.Unmarshal(data, &order); err != nil {
@@ -497,6 +657,9 @@ func (t *BitgetTrader) GetOrderStatus(symbol string, orderID string) (map[string
 // GetOpenOrders gets all open/pending orders for a symbol
 func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		return t.utaGetOpenOrders(symbol)
+	}
 	var result []types.OpenOrder
 
 	// 1. Get pending limit orders
@@ -507,20 +670,23 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 
 	data, err := t.doRequest("GET", bitgetPendingPath, params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaGetOpenOrders(symbol)
+		}
 		logger.Warnf("[Bitget] Failed to get pending orders: %v", err)
 	}
 	if err == nil && data != nil {
 		var orders struct {
 			EntrustedList []struct {
-				OrderId      string `json:"orderId"`
-				Symbol       string `json:"symbol"`
-				Side         string `json:"side"`         // buy/sell
-				TradeSide    string `json:"tradeSide"`    // open/close
-				PosSide      string `json:"posSide"`      // long/short
-				OrderType    string `json:"orderType"`    // limit/market
-				Price        string `json:"price"`
-				Size         string `json:"size"`
-				State        string `json:"state"`
+				OrderId   string `json:"orderId"`
+				Symbol    string `json:"symbol"`
+				Side      string `json:"side"`      // buy/sell
+				TradeSide string `json:"tradeSide"` // open/close
+				PosSide   string `json:"posSide"`   // long/short
+				OrderType string `json:"orderType"` // limit/market
+				Price     string `json:"price"`
+				Size      string `json:"size"`
+				State     string `json:"state"`
 			} `json:"entrustedList"`
 		}
 		if err := json.Unmarshal(data, &orders); err == nil {
@@ -639,10 +805,29 @@ func (t *BitgetTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Lim
 	// Format quantity
 	qtyStr, _ := t.FormatQuantity(symbol, req.Quantity)
 
-	// Determine side
 	side := "buy"
 	if req.Side == "SELL" {
 		side = "sell"
+	}
+
+	if t.useUTA() {
+		logger.Infof("[Bitget UTA] PlaceLimitOrder: %s %s @ %.4f, qty=%s", symbol, side, req.Price, qtyStr)
+		orderID, clientOid, err := t.utaPlaceLimit(symbol, side, qtyStr, fmt.Sprintf("%.8f", req.Price), req.ReduceOnly)
+		if err != nil {
+			return nil, fmt.Errorf("failed to place limit order: %w", err)
+		}
+		logger.Infof("✓ [Bitget] Limit order placed: %s %s @ %.4f, orderID=%s",
+			symbol, side, req.Price, orderID)
+		return &types.LimitOrderResult{
+			OrderID:      orderID,
+			ClientID:     clientOid,
+			Symbol:       req.Symbol,
+			Side:         req.Side,
+			PositionSide: req.PositionSide,
+			Price:        req.Price,
+			Quantity:     req.Quantity,
+			Status:       "NEW",
+		}, nil
 	}
 
 	body := map[string]interface{}{
@@ -667,6 +852,22 @@ func (t *BitgetTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Lim
 
 	data, err := t.doRequest("POST", bitgetOrderPath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			orderID, clientOid, utaErr := t.utaPlaceLimit(symbol, side, qtyStr, fmt.Sprintf("%.8f", req.Price), req.ReduceOnly)
+			if utaErr != nil {
+				return nil, fmt.Errorf("failed to place limit order: %w", utaErr)
+			}
+			return &types.LimitOrderResult{
+				OrderID:      orderID,
+				ClientID:     clientOid,
+				Symbol:       req.Symbol,
+				Side:         req.Side,
+				PositionSide: req.PositionSide,
+				Price:        req.Price,
+				Quantity:     req.Quantity,
+				Status:       "NEW",
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to place limit order: %w", err)
 	}
 
@@ -698,6 +899,13 @@ func (t *BitgetTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Lim
 // Implements GridTrader interface
 func (t *BitgetTrader) CancelOrder(symbol, orderID string) error {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		if err := t.utaCancelOrder(orderID); err != nil {
+			return fmt.Errorf("failed to cancel order: %w", err)
+		}
+		logger.Infof("✓ [Bitget] Order cancelled: %s %s", symbol, orderID)
+		return nil
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -707,6 +915,13 @@ func (t *BitgetTrader) CancelOrder(symbol, orderID string) error {
 
 	_, err := t.doRequest("POST", "/api/v2/mix/order/cancel-order", body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			if utaErr := t.utaCancelOrder(orderID); utaErr != nil {
+				return fmt.Errorf("failed to cancel order: %w", utaErr)
+			}
+			logger.Infof("✓ [Bitget] Order cancelled: %s %s", symbol, orderID)
+			return nil
+		}
 		return fmt.Errorf("failed to cancel order: %w", err)
 	}
 

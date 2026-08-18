@@ -184,6 +184,12 @@ func probeExchangeAccountState(exchangeCfg *store.Exchange, userID string) Excha
 		logger.Infof("⚠️ Failed to probe exchange account %s (%s): %v", exchangeCfg.ID, exchangeCfg.ExchangeType, err)
 		return state
 	}
+	if missing, _ := balanceInfo["balancePermissionMissing"].(bool); missing {
+		state.Status = exchangeAccountStatusPermissionDenied
+		state.ErrorCode = "BITGET_UTA_MANAGEMENT_PERMISSION_REQUIRED"
+		state.ErrorMessage = "Bitget UTA Management read/write permission is required to read available collateral and set leverage"
+		return state
+	}
 
 	totalEquity, totalFound := extractFirstNumeric(balanceInfo,
 		"total_equity", "totalEquity", "totalWalletBalance", "wallet_balance", "totalEq", "balance")

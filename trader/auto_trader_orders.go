@@ -6,6 +6,7 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/store"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,18 @@ const (
 	// trigger an insufficient-margin rejection.
 	positionSizeSafetyFactor = 0.98
 )
+
+func currentAccountEquity(balance map[string]interface{}, availableBalance float64) float64 {
+	for _, key := range []string{"totalEquity", "total_equity"} {
+		if equity, ok := balance[key].(float64); ok && equity > 0 {
+			return equity
+		}
+	}
+	if wallet, ok := balance["totalWalletBalance"].(float64); ok && wallet > 0 {
+		return wallet
+	}
+	return availableBalance
+}
 
 // executeDecisionWithRecord executes AI decision and records detailed information
 func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
@@ -81,14 +94,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	}
 
 	// Get equity for position value ratio check
-	equity := 0.0
-	if eq, ok := balance["totalEquity"].(float64); ok && eq > 0 {
-		equity = eq
-	} else if eq, ok := balance["totalWalletBalance"].(float64); ok && eq > 0 {
-		equity = eq
-	} else {
-		equity = availableBalance // Fallback to available balance
-	}
+	equity := currentAccountEquity(balance, availableBalance)
 
 	at.applyAutopilotFullSizeOpen(decision, equity)
 
@@ -147,12 +153,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		logger.Infof("  ⚠ Failed to set stop loss: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
-		logger.Infof("  ⚠ Failed to set take profit: %v", err)
+	at.applyDefaultProtectivePrices(decision, marketData.CurrentPrice)
+	if err := at.placeProtectiveOrders(decision.Symbol, "LONG", quantity, decision.StopLoss, decision.TakeProfit); err != nil {
+		at.logErrorf("🛡️ Protective orders failed after opening %s long: %v — position is live, set stops manually", decision.Symbol, err)
 	}
 
 	return nil
@@ -197,14 +200,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	}
 
 	// Get equity for position value ratio check
-	equity := 0.0
-	if eq, ok := balance["totalEquity"].(float64); ok && eq > 0 {
-		equity = eq
-	} else if eq, ok := balance["totalWalletBalance"].(float64); ok && eq > 0 {
-		equity = eq
-	} else {
-		equity = availableBalance // Fallback to available balance
-	}
+	equity := currentAccountEquity(balance, availableBalance)
 
 	at.applyAutopilotFullSizeOpen(decision, equity)
 
@@ -263,12 +259,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		logger.Infof("  ⚠ Failed to set stop loss: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
-		logger.Infof("  ⚠ Failed to set take profit: %v", err)
+	at.applyDefaultProtectivePrices(decision, marketData.CurrentPrice)
+	if err := at.placeProtectiveOrders(decision.Symbol, "SHORT", quantity, decision.StopLoss, decision.TakeProfit); err != nil {
+		at.logErrorf("🛡️ Protective orders failed after opening %s short: %v — position is live, set stops manually", decision.Symbol, err)
 	}
 
 	return nil
@@ -400,4 +393,94 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
+}
+
+const (
+	defaultOpenStopPct = 2.0
+	defaultOpenTakePct = 6.0
+)
+
+func applyDefaultProtectivePrices(decision *kernel.Decision, entry float64) {
+	if decision == nil || entry <= 0 {
+		return
+	}
+	long := decision.Action != "open_short"
+	if decision.StopLoss <= 0 {
+		if long {
+			decision.StopLoss = entry * (1 - defaultOpenStopPct/100)
+		} else {
+			decision.StopLoss = entry * (1 + defaultOpenStopPct/100)
+		}
+		logger.Errorf("🛡️ %s had stop_loss=0; using %.1f%% default at %.6f", decision.Symbol, defaultOpenStopPct, decision.StopLoss)
+	}
+	if decision.TakeProfit <= 0 {
+		if long {
+			decision.TakeProfit = entry * (1 + defaultOpenTakePct/100)
+		} else {
+			decision.TakeProfit = entry * (1 - defaultOpenTakePct/100)
+		}
+		logger.Errorf("🛡️ %s had take_profit=0; using %.1f%% default at %.6f", decision.Symbol, defaultOpenTakePct, decision.TakeProfit)
+	}
+}
+
+func (at *AutoTrader) applyDefaultProtectivePrices(decision *kernel.Decision, entry float64) {
+	applyDefaultProtectivePrices(decision, entry)
+}
+
+func (at *AutoTrader) placeProtectiveOrders(symbol, side string, quantity, stopLoss, takeProfit float64) error {
+	if stopLoss <= 0 {
+		return fmt.Errorf("refusing to send stop_loss=0 to the exchange")
+	}
+	if err := at.trader.SetStopLoss(symbol, side, quantity, stopLoss); err != nil {
+		return fmt.Errorf("stop loss: %w", err)
+	}
+	if takeProfit > 0 {
+		if err := at.trader.SetTakeProfit(symbol, side, quantity, takeProfit); err != nil {
+			at.logErrorf("🛡️ Failed to set take profit on %s: %v", symbol, err)
+		}
+	}
+	if at.fallbackStopsPlaced == nil {
+		at.fallbackStopsPlaced = make(map[string]bool)
+	}
+	at.fallbackStopsPlaced[symbol+"_"+strings.ToLower(side)] = true
+	return nil
+}
+
+func (at *AutoTrader) protectNakedPositions(ctx *kernel.Context) {
+	if at == nil || ctx == nil || at.trader == nil {
+		return
+	}
+	if at.fallbackStopsPlaced == nil {
+		at.fallbackStopsPlaced = make(map[string]bool)
+	}
+	for _, pos := range ctx.Positions {
+		if pos.Quantity <= 0 {
+			continue
+		}
+		side := strings.ToUpper(pos.Side)
+		if side != "LONG" && side != "SHORT" {
+			continue
+		}
+		key := pos.Symbol + "_" + strings.ToLower(side)
+		if at.fallbackStopsPlaced[key] {
+			continue
+		}
+		entry := pos.MarkPrice
+		if entry <= 0 {
+			entry = pos.EntryPrice
+		}
+		if entry <= 0 {
+			continue
+		}
+		d := &kernel.Decision{Symbol: pos.Symbol, Action: "open_long"}
+		if side == "SHORT" {
+			d.Action = "open_short"
+		}
+		applyDefaultProtectivePrices(d, entry)
+		if err := at.placeProtectiveOrders(pos.Symbol, side, pos.Quantity, d.StopLoss, d.TakeProfit); err != nil {
+			at.logErrorf("🛡️ Failed to attach fallback stops to open %s %s: %v — set stops manually on the exchange", pos.Symbol, side, err)
+			continue
+		}
+		at.logErrorf("🛡️ Attached fallback %.1f%% stop / %.1f%% take-profit to already-open %s %s (AI had left it unprotected)", defaultOpenStopPct, defaultOpenTakePct, pos.Symbol, side)
+	}
 }

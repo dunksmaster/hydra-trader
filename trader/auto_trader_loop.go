@@ -102,6 +102,35 @@ func (at *AutoTrader) runCycle() error {
 	// Save equity snapshot independently (decoupled from AI decision, used for drawing profit curve)
 	// NOTE: Must be called BEFORE candidate coins check to ensure equity is always recorded
 	at.saveEquitySnapshot(ctx)
+	at.protectNakedPositions(ctx)
+
+	// Profit locks are exchange safety actions, not AI advice. Execute them
+	// before the model call so quota/provider failures cannot strand a winner
+	// above the configured threshold. End the cycle afterward because ctx still
+	// describes the pre-close account and must not be reused for new orders.
+	if hardTPDecisions := at.injectHardTakeProfits(nil, ctx); len(hardTPDecisions) > 0 {
+		for _, d := range hardTPDecisions {
+			actionRecord := store.DecisionAction{
+				Action: d.Action, Symbol: d.Symbol, Confidence: d.Confidence,
+				Reasoning: d.Reasoning, Timestamp: time.Now().UTC(),
+			}
+			if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
+				at.logErrorf("❌ Hard take-profit failed (%s %s): %v", d.Symbol, d.Action, err)
+				actionRecord.Error = err.Error()
+				record.Success = false
+				record.ErrorMessage = fmt.Sprintf("Hard take-profit failed for %s: %v", d.Symbol, err)
+				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ hard TP %s %s failed: %v", d.Symbol, d.Action, err))
+			} else {
+				actionRecord.Success = true
+				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ hard TP %s %s succeeded", d.Symbol, d.Action))
+			}
+			record.Decisions = append(record.Decisions, actionRecord)
+		}
+		if err := at.saveDecision(record); err != nil {
+			at.logWarnf("⚠ Failed to save hard take-profit decision record: %v", err)
+		}
+		return nil
+	}
 
 	// If no candidate coins available, log but do not error
 	if len(ctx.CandidateCoins) == 0 {

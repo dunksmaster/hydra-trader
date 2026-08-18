@@ -18,6 +18,10 @@ func (t *BitgetTrader) GetPositions() ([]map[string]interface{}, error) {
 	}
 	t.positionsCacheMutex.RUnlock()
 
+	if t.useUTA() {
+		return t.utaGetPositions()
+	}
+
 	params := map[string]interface{}{
 		"productType": "USDT-FUTURES",
 		"marginCoin":  "USDT",
@@ -25,6 +29,9 @@ func (t *BitgetTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	data, err := t.doRequest("GET", bitgetPositionPath, params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaGetPositions()
+		}
 		return nil, fmt.Errorf("failed to get positions: %w", err)
 	}
 
@@ -100,6 +107,9 @@ func (t *BitgetTrader) GetClosedPnL(startTime time.Time, limit int) ([]types.Clo
 	if limit > 100 {
 		limit = 100
 	}
+	if t.useUTA() {
+		return t.utaGetClosedPnL(startTime, limit)
+	}
 
 	params := map[string]interface{}{
 		"productType": "USDT-FUTURES",
@@ -109,6 +119,9 @@ func (t *BitgetTrader) GetClosedPnL(startTime time.Time, limit int) ([]types.Clo
 
 	data, err := t.doRequest("GET", "/api/v2/mix/position/history-position", params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaGetClosedPnL(startTime, limit)
+		}
 		return nil, fmt.Errorf("failed to get positions history: %w", err)
 	}
 

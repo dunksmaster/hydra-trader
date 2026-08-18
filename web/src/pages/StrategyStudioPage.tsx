@@ -252,6 +252,8 @@ function defaultRisk(risk?: Partial<RiskControlConfig>): RiskControlConfig {
     min_position_size: risk?.min_position_size || 12,
     min_risk_reward_ratio: risk?.min_risk_reward_ratio || 3,
     min_confidence: risk?.min_confidence || 78,
+    hard_take_profit_margin_pct:
+      risk?.hard_take_profit_margin_pct ?? 15,
   }
 }
 
@@ -1619,8 +1621,8 @@ export function StrategyStudioPage() {
         </div>
       </div>
 
-      <div className="grid min-h-[calc(100vh-137px)] grid-cols-1">
-        <aside className="hidden border-r border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper p-3">
+      <div className="grid min-h-[calc(100vh-137px)] grid-cols-1 lg:grid-cols-[240px_1fr]">
+        <aside className="border-r border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper p-3">
           <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-nofx-text-muted">
             {text(language, 'My strategies', 'My strategies')}
           </div>
@@ -1663,7 +1665,7 @@ export function StrategyStudioPage() {
         <main className="overflow-y-auto p-5">
           {selectedStrategy && aiConfig && coinSource && indicators && risk ? (
             <div className="mx-auto max-w-7xl space-y-4">
-              <section className="hidden rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg-lighter p-4">
+              <section className="rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg-lighter p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <input
@@ -1699,7 +1701,7 @@ export function StrategyStudioPage() {
                       </div>
                     ) : null}
                   </div>
-                  <div className="hidden flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => saveStrategy(true)}
@@ -1772,7 +1774,7 @@ export function StrategyStudioPage() {
                         }
                       }}
                       disabled={signalsLoading}
-                      className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
+                      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
                         listMode === 'claw402'
                           ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
                           : 'border-[rgba(26,24,19,0.14)] text-nofx-text-muted hover:text-nofx-text'
@@ -1787,7 +1789,7 @@ export function StrategyStudioPage() {
                       type="button"
                       onClick={() => setListMode('pool')}
                       disabled={symbolsLoading}
-                      className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
+                      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
                         listMode === 'pool'
                           ? 'border-[rgba(26,24,19,0.24)] bg-nofx-bg-deeper text-nofx-text'
                           : 'border-[rgba(26,24,19,0.14)] text-nofx-text-muted hover:text-nofx-text'
@@ -1820,7 +1822,7 @@ export function StrategyStudioPage() {
                             vergex_market_type: 'all',
                           })
                         }
-                        className="hidden rounded-lg border border-[rgba(26,24,19,0.14)] px-3 py-2 text-xs text-nofx-text-muted hover:text-nofx-text"
+                        className="rounded-lg border border-[rgba(26,24,19,0.14)] px-3 py-2 text-xs text-nofx-text-muted hover:text-nofx-text"
                       >
                         Clear selected
                       </button>
@@ -1828,7 +1830,7 @@ export function StrategyStudioPage() {
                   </div>
                 </div>
 
-                <div className="hidden mb-4 flex-wrap gap-2">
+                <div className="mb-4 flex flex-wrap gap-2">
                   {scopeOptions.map((option) => {
                     const signalCount =
                       option.value === 'all'
@@ -1865,7 +1867,7 @@ export function StrategyStudioPage() {
                   })}
                 </div>
 
-                <div className="hidden mb-4 gap-3 md:grid-cols-2">
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => {
@@ -1929,7 +1931,7 @@ export function StrategyStudioPage() {
                   </button>
                 </div>
 
-                <div className="hidden mb-4 flex-wrap items-center gap-3">
+                <div className="mb-4 flex flex-wrap items-center gap-3">
                   <span className="text-sm text-nofx-text-muted">
                     {selectedSymbols.length > 0
                       ? `${selectedSymbols.length} selected`
@@ -2170,7 +2172,7 @@ export function StrategyStudioPage() {
                 ) : null}
               </section>
 
-              <details className="hidden rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper p-4">
+              <details className="rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper p-4">
                 <summary className="cursor-pointer text-sm font-semibold text-nofx-text">
                   {text(language, 'Advanced settings', 'Advanced settings')}
                 </summary>
@@ -2257,7 +2259,7 @@ export function StrategyStudioPage() {
                         'Trading parameters'
                       )}
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                       <label className="space-y-2">
                         <span className="text-xs text-nofx-text-muted">
                           {text(language, 'Max positions', 'Max positions')}
@@ -2316,6 +2318,34 @@ export function StrategyStudioPage() {
                           {confidenceOptions.map((value) => (
                             <option key={value} value={value}>
                               {value}%
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs text-nofx-text-muted">
+                          {text(
+                            language,
+                            'Hard TP (margin PnL)',
+                            'Hard TP (margin PnL)'
+                          )}
+                        </span>
+                        <select
+                          value={risk.hard_take_profit_margin_pct ?? 15}
+                          onChange={(event) =>
+                            patchRisk({
+                              hard_take_profit_margin_pct: Number(
+                                event.target.value
+                              ),
+                            })
+                          }
+                          className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                        >
+                          {[0, 10, 15, 20, 30, 50].map((value) => (
+                            <option key={value} value={value}>
+                              {value === 0
+                                ? text(language, 'Off', 'Off')
+                                : `+${value}%`}
                             </option>
                           ))}
                         </select>

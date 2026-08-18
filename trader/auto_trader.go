@@ -203,6 +203,7 @@ type AutoTrader struct {
 	aiWalletStatus        string             // "ok"|"low"|"empty"|"unknown" — see runtime_health.go
 	aiWalletBalanceUSDC   float64            // Last observed Base USDC balance of the claw402 wallet
 	aiWalletCheckedAt     time.Time          // When the balance was last observed
+	fallbackStopsPlaced   map[string]bool    // symbol_side already given a fallback SL/TP this process
 }
 
 // NewAutoTrader creates an automatic trader
@@ -409,6 +410,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		stopMonitorCh:         make(chan struct{}),
 		monitorWg:             sync.WaitGroup{},
 		peakPnLCache:          make(map[string]float64),
+		fallbackStopsPlaced:   make(map[string]bool),
 		peakPnLCacheMutex:     sync.RWMutex{},
 		lastBalanceSyncTime:   time.Now(),
 		userID:                userID,

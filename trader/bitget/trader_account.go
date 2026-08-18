@@ -20,12 +20,19 @@ func (t *BitgetTrader) GetBalance() (map[string]interface{}, error) {
 	}
 	t.balanceCacheMutex.RUnlock()
 
+	if t.useUTA() {
+		return t.utaGetBalance()
+	}
+
 	params := map[string]interface{}{
 		"productType": "USDT-FUTURES",
 	}
 
 	data, err := t.doRequest("GET", bitgetAccountPath, params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaGetBalance()
+		}
 		return nil, fmt.Errorf("failed to get account balance: %w", err)
 	}
 
@@ -62,6 +69,7 @@ func (t *BitgetTrader) GetBalance() (map[string]interface{}, error) {
 		"totalWalletBalance":    totalEquity - unrealizedPnL,
 		"availableBalance":      availableBalance,
 		"totalUnrealizedProfit": unrealizedPnL,
+		"totalEquity":           totalEquity,
 		"total_equity":          totalEquity,
 	}
 
@@ -77,6 +85,9 @@ func (t *BitgetTrader) GetBalance() (map[string]interface{}, error) {
 // SetMarginMode sets margin mode
 func (t *BitgetTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		return t.utaSetMarginMode(symbol, isCrossMargin)
+	}
 
 	marginMode := "isolated"
 	if isCrossMargin {
@@ -92,6 +103,9 @@ func (t *BitgetTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 
 	_, err := t.doRequest("POST", bitgetMarginModePath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaSetMarginMode(symbol, isCrossMargin)
+		}
 		if strings.Contains(err.Error(), "same") || strings.Contains(err.Error(), "already") {
 			return nil
 		}
@@ -109,6 +123,9 @@ func (t *BitgetTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 // SetLeverage sets leverage
 func (t *BitgetTrader) SetLeverage(symbol string, leverage int) error {
 	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		return t.utaSetLeverage(symbol, leverage)
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -119,6 +136,9 @@ func (t *BitgetTrader) SetLeverage(symbol string, leverage int) error {
 
 	_, err := t.doRequest("POST", bitgetLeveragePath, body)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaSetLeverage(symbol, leverage)
+		}
 		if strings.Contains(err.Error(), "same") {
 			return nil
 		}

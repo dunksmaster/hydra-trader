@@ -13,6 +13,45 @@ import (
 	"time"
 )
 
+type bitgetFill struct {
+	TradeID    string `json:"tradeId"`
+	Symbol     string `json:"symbol"`
+	OrderID    string `json:"orderId"`
+	Side       string `json:"side"`
+	Price      string `json:"price"`
+	BaseVolume string `json:"baseVolume"`
+	Profit     string `json:"profit"`
+	CTime      string `json:"cTime"`
+	TradeSide  string `json:"tradeSide"`
+	FeeDetail  []struct {
+		FeeCoin  string `json:"feeCoin"`
+		TotalFee string `json:"totalFee"`
+	} `json:"feeDetail"`
+}
+
+// parseBitgetFillHistory accepts Bitget's wrapped object ({"fillList":[...],"endId":...})
+// including a null fillList (no fills yet), or a bare JSON array.
+func parseBitgetFillHistory(data []byte) ([]bitgetFill, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err == nil {
+		if raw, ok := obj["fillList"]; ok {
+			if len(raw) == 0 || string(raw) == "null" {
+				return []bitgetFill{}, nil
+			}
+			var fills []bitgetFill
+			if err := json.Unmarshal(raw, &fills); err != nil {
+				return nil, err
+			}
+			return fills, nil
+		}
+	}
+	var fills []bitgetFill
+	if err := json.Unmarshal(data, &fills); err != nil {
+		return nil, err
+	}
+	return fills, nil
+}
+
 // BitgetTrade represents a trade record from Bitget fill history
 type BitgetTrade struct {
 	Symbol      string
@@ -37,6 +76,9 @@ func (t *BitgetTrader) GetTrades(startTime time.Time, limit int) ([]BitgetTrade,
 	if limit > 100 {
 		limit = 100 // Bitget max limit is 100
 	}
+	if t.useUTA() {
+		return t.utaGetTrades(startTime, limit)
+	}
 
 	params := map[string]interface{}{
 		"productType": "USDT-FUTURES",
@@ -46,46 +88,18 @@ func (t *BitgetTrader) GetTrades(startTime time.Time, limit int) ([]BitgetTrade,
 
 	data, err := t.doRequest("GET", "/api/v2/mix/order/fill-history", params)
 	if err != nil {
+		if isBitgetClassicBlocked(err) {
+			return t.utaGetTrades(startTime, limit)
+		}
 		return nil, fmt.Errorf("failed to get fill history: %w", err)
 	}
 
-	// Bitget fill structure - supports both one-way and hedge mode
-	type BitgetFill struct {
-		TradeID    string `json:"tradeId"`
-		Symbol     string `json:"symbol"`
-		OrderID    string `json:"orderId"`
-		Side       string `json:"side"`       // buy, sell
-		Price      string `json:"price"`      // Fill price
-		BaseVolume string `json:"baseVolume"` // Fill size in base currency
-		Profit     string `json:"profit"`     // Realized PnL
-		CTime      string `json:"cTime"`      // Fill time (ms)
-		TradeSide  string `json:"tradeSide"`  // one-way: buy_single/sell_single, hedge: open/close
-		FeeDetail  []struct {
-			FeeCoin  string `json:"feeCoin"`
-			TotalFee string `json:"totalFee"`
-		} `json:"feeDetail"`
+	directFills, err := parseBitgetFillHistory(data)
+	if err != nil {
+		logger.Infof("⚠️ Bitget fill-history parse failed, raw: %s", string(data))
+		return nil, fmt.Errorf("failed to parse fills: %w", err)
 	}
-
-	// Try parsing as wrapped response first (fillList field)
-	var wrappedResp struct {
-		FillList []BitgetFill `json:"fillList"`
-	}
-
-	// Try direct array format (Bitget V2 API returns data as direct array)
-	var directFills []BitgetFill
-
-	// Try wrapped format first
-	if err := json.Unmarshal(data, &wrappedResp); err == nil && len(wrappedResp.FillList) > 0 {
-		logger.Infof("🔍 Bitget: parsed as wrapped format, fillList count: %d", len(wrappedResp.FillList))
-		directFills = wrappedResp.FillList
-	} else {
-		// Try direct array format
-		if err := json.Unmarshal(data, &directFills); err != nil {
-			logger.Infof("⚠️ Bitget fill-history parse failed, raw: %s", string(data))
-			return nil, fmt.Errorf("failed to parse fills: %w", err)
-		}
-		logger.Infof("🔍 Bitget: parsed as direct array, fills count: %d", len(directFills))
-	}
+	logger.Infof("🔍 Bitget: parsed fill-history, fills count: %d", len(directFills))
 
 	trades := make([]BitgetTrade, 0, len(directFills))
 
