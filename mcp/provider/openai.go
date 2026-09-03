@@ -65,6 +65,7 @@ func (c *OpenAIClient) SetAPIKey(apiKey string, customURL string, customModel st
 	} else {
 		c.Log.Infof("🔧 [MCP] OpenAI using default Model: %s", c.Model)
 	}
+	mcp.ApplyNVIDIAThinkingClientTuning(c.Client, c.Model, c.BaseURL)
 }
 
 // OpenAI uses standard Bearer auth

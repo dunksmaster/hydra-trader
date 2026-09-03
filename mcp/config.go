@@ -37,20 +37,32 @@ type Config struct {
 	HTTPClient *http.Client
 }
 
+// aiTimeoutFromEnv returns the AI request timeout from AI_TIMEOUT_SECONDS,
+// falling back to DefaultTimeout when unset or invalid.
+func aiTimeoutFromEnv() time.Duration {
+	if val := os.Getenv("AI_TIMEOUT_SECONDS"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			return time.Duration(parsed) * time.Second
+		}
+	}
+	return DefaultTimeout
+}
+
 // DefaultConfig returns default configuration
 func DefaultConfig() *Config {
+	timeout := aiTimeoutFromEnv()
 	return &Config{
 		// Default values
 		MaxTokens:      getEnvInt("AI_MAX_TOKENS", 2000),
 		Temperature:    MCPClientTemperature,
 		MaxRetries:     MaxRetryTimes,
 		RetryWaitBase:  2 * time.Second,
-		Timeout:        DefaultTimeout,
+		Timeout:        timeout,
 		RetryableErrors: retryableErrors,
 
 		// Default dependencies (use global logger)
 		Logger:     logger.NewMCPLogger(),
-		HTTPClient: security.SafeHTTPClient(DefaultTimeout),
+		HTTPClient: security.SafeHTTPClient(timeout),
 	}
 }
 

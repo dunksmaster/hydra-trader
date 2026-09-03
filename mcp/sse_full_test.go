@@ -23,7 +23,7 @@ data: [DONE]
 
 func TestParseResponseBodyFullJSON(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hello","tool_calls":[]}}]}`)
-	client := NewClient()
+	client := NewClient().(*Client)
 	resp, err := ParseResponseBodyFull(client, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -175,6 +175,7 @@ func (client *Client) SetAPIKey(apiKey, apiURL, customModel string) {
 	}
 
 	client.Model = customModel
+	ApplyNVIDIAThinkingClientTuning(client, customModel, client.BaseURL)
 }
 
 func (client *Client) SetTimeout(timeout time.Duration) {
@@ -281,6 +282,7 @@ func (client *Client) BuildMCPRequestBody(systemPrompt, userPrompt string) map[s
 	} else {
 		requestBody["max_tokens"] = client.MaxTokens
 	}
+	applyProviderBodyOverrides(requestBody, client.Model, client.BaseURL)
 	return requestBody
 }
 
@@ -411,6 +413,10 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 
 	// Step 1: Build request body (via hooks for dynamic dispatch)
 	requestBody := client.Hooks.BuildMCPRequestBody(systemPrompt, userPrompt)
+	stream := prefersNVIDIAStreaming(client.Model, client.BaseURL)
+	if stream {
+		requestBody["stream"] = true
+	}
 
 	// Step 2: Serialize request body (via hooks for dynamic dispatch)
 	jsonData, err := client.Hooks.MarshalRequestBody(requestBody)
@@ -426,6 +432,10 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	req, err := client.Hooks.BuildRequest(url, jsonData)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if stream {
+		return client.readStreamedCompletion(req)
 	}
 
 	// Step 5: Send HTTP request (fixed logic)
@@ -455,6 +465,63 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	return result, nil
 }
 
+func (client *Client) readStreamedCompletion(req *http.Request) (string, error) {
+	client.Log.Infof("📡 [%s] Streaming thinking-model response (reasoning_budget=%d)", client.String(), nvidiaReasoningBudget)
+
+	const idleTimeout = 60 * time.Second
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	resetCh := make(chan struct{}, 1)
+	go func() {
+		t := time.NewTimer(idleTimeout)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				cancel()
+				return
+			case <-resetCh:
+				if !t.Stop() {
+					select {
+					case <-t.C:
+					default:
+					}
+				}
+				t.Reset(idleTimeout)
+			}
+		}
+	}()
+
+	req = req.WithContext(ctx)
+	resp, err := client.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API returned error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	text, usage, err := ParseSSEStream(resp.Body, nil, func() {
+		select {
+		case resetCh <- struct{}{}:
+		default:
+		}
+	})
+	ReportStreamUsage(usage, client.Provider, client.Model)
+	if err != nil {
+		return text, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("fail to parse AI server response: empty streamed content")
+	}
+	return text, nil
+}
+
 func (client *Client) String() string {
 	return fmt.Sprintf("[Provider: %s, Model: %s]",
 		client.Provider, client.Model)
@@ -464,7 +531,26 @@ func (client *Client) String() string {
 func (c *Client) BaseClient() *Client { return c }
 
 // IsRetryableError determines if error is retryable (network errors, timeouts, etc.)
+func isNonRetryableQuota(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "resource_exhausted") ||
+		strings.Contains(msg, "exceeded your current quota") ||
+		strings.Contains(msg, "free_tier") ||
+		strings.Contains(msg, "generaterequestsperday") ||
+		strings.Contains(msg, "quota exceeded for metric")
+}
+
 func (client *Client) IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Daily / billing quota 429s are not retryable — retries burn the same cap.
+	if isNonRetryableQuota(err) {
+		return false
+	}
 	errStr := err.Error()
 	// Network errors, timeouts, EOF, etc. can be retried
 	for _, retryable := range client.Cfg.RetryableErrors {
@@ -733,6 +819,7 @@ func (client *Client) BuildRequestBodyFromRequest(req *Request) map[string]any {
 		requestBody["stream"] = true
 	}
 
+	applyProviderBodyOverrides(requestBody, req.Model, client.BaseURL)
 	return requestBody
 }
 
