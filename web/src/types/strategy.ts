@@ -39,8 +39,8 @@ export interface PromptSectionsConfig {
 }
 
 export interface StrategyConfig {
-  // Strategy type: "ai_trading" (default) or "grid_trading"
-  strategy_type?: 'ai_trading' | 'grid_trading';
+  // Strategy type: "ai_trading" (default), "grid_trading", or "copy_trading"
+  strategy_type?: 'ai_trading' | 'grid_trading' | 'copy_trading';
   // Language setting: "zh" for Chinese, "en" for English
   // Determines the language used for data formatting and prompt generation
   language?: 'zh' | 'en';
@@ -54,6 +54,8 @@ export interface StrategyConfig {
   prompt_sections?: PromptSectionsConfig;
   // Grid trading configuration (only used when strategy_type is 'grid_trading')
   grid_config?: GridStrategyConfig | null;
+  // Copy trading configuration (only used when strategy_type is 'copy_trading')
+  copy_config?: CopyStrategyConfig | null;
   publish_config?: PublishStrategyConfig;
 }
 
@@ -102,6 +104,34 @@ export interface GridStrategyConfig {
   enable_direction_adjust?: boolean;
   // Direction bias ratio for long_bias/short_bias modes (default 0.7 = 70%/30%)
   direction_bias_ratio?: number;
+}
+
+export interface CopyStrategyConfig {
+  leader_address: string;
+  copy_mode?: 'fills' | 'snapshot';
+  size_mode?: 'fixed_notional' | 'proportional';
+  notional_usd?: number;
+  copy_ratio?: number;
+  min_notional_usd?: number;
+  max_notional_pct?: number;
+  max_leverage?: number;
+  max_positions?: number;
+  wallet_copy_slots?: number;
+  exit_mode?: 'leader_only' | 'leader_plus_stop';
+  safety_stop_pct?: number;
+  symbol_blocklist?: string[];
+  reconcile_interval_sec?: number;
+  copy_on_start?: boolean;
+  min_leader_fill_usd?: number;
+  dry_run?: boolean;
+  inverse?: boolean;
+  copy_layer?: number;
+  copy_paused?: boolean;
+  overflow_enabled?: boolean;
+  overflow_trader_id?: string;
+  overflow_on_skip?: string[];
+  overflow_notional_usd?: number;
+  overflow_max_positions?: number;
 }
 
 export interface CoinSourceConfig {
@@ -210,4 +240,5 @@ export interface RiskControlConfig {
   min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
   min_confidence: number;          // Min AI confidence to open position (AI guided)
   hard_take_profit_margin_pct?: number; // Margin PnL threshold; 0 disables
+  hard_stop_loss_margin_pct?: number; // Positive margin-loss threshold; 0 disables
 }

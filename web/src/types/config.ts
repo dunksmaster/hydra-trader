@@ -12,11 +12,13 @@ export interface AIModel {
 }
 
 export interface TelegramConfig {
-  token_masked: string // Masked token like "123456:ABC***XYZ"
+  configured?: boolean // Whether a bot token is saved (token value never returned)
   is_bound: boolean // Whether a user has sent /start
   bound_chat_id?: number // The bound chat ID (if any)
   model_id?: string // AI model selected for Telegram replies
   bind_code?: string // One-time code required for /start binding
+  username?: string
+  bound_at?: string
 }
 
 export interface Exchange {

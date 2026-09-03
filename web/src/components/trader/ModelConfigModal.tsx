@@ -14,6 +14,7 @@ import {
   getDefaultModelNameForProvider,
   getShortName,
 } from './model-constants'
+import { getAuthHeaders } from '../../lib/api/helpers'
 
 interface ModelConfigModalProps {
   allModels: AIModel[]
@@ -484,7 +485,7 @@ function Claw402ConfigForm({
       try {
         const res = await fetch('/api/wallet/validate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(),
           body: JSON.stringify({ private_key: apiKey }),
         })
         const data = await res.json()
@@ -757,6 +758,7 @@ function Claw402ConfigForm({
                   try {
                     const res = await fetch('/api/wallet/generate', {
                       method: 'POST',
+                      headers: getAuthHeaders(),
                     })
                     const data = await res.json()
                     if (data.private_key) {

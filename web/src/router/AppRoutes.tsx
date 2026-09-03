@@ -26,6 +26,7 @@ import { BeginnerOnboardingPage } from '../pages/BeginnerOnboardingPage'
 import { DataPage } from '../pages/DataPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { StrategyStudioPage } from '../pages/StrategyStudioPage'
+import { CopyBotsPage } from '../pages/CopyBotsPage'
 import { TerminalDashboard } from '../components/terminal/TerminalDashboard'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -448,6 +449,18 @@ export function AppRoutes() {
             // no legacy "beginner mode" gate here.
             isAuthenticated ? (
               <TradersRoute showBeginnerOnboarding />
+            ) : (
+              <Navigate to={ROUTES.login} replace />
+            )
+          }
+        />
+        <Route
+          path={ROUTES.copy}
+          element={
+            isAuthenticated ? (
+              <AppChrome currentPage="copy" animateContent>
+                <CopyBotsPage />
+              </AppChrome>
             ) : (
               <Navigate to={ROUTES.login} replace />
             )

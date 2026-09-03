@@ -2,6 +2,7 @@ export type Page =
   | 'competition'
   | 'traders'
   | 'trader'
+  | 'copy'
   | 'strategy'
   | 'strategy-market'
   | 'data'
@@ -22,6 +23,7 @@ export const ROUTES = {
   data: '/data',
   competition: '/competition',
   traders: '/traders',
+  copy: '/copy',
   dashboard: '/dashboard',
   strategy: '/strategy',
   strategyMarket: '/strategy-market',
@@ -31,6 +33,7 @@ export const PAGE_PATHS: Record<Page, string> = {
   competition: ROUTES.competition,
   traders: ROUTES.traders,
   trader: ROUTES.dashboard,
+  copy: ROUTES.copy,
   strategy: ROUTES.strategy,
   'strategy-market': ROUTES.strategyMarket,
   data: ROUTES.data,
@@ -56,6 +59,8 @@ export function getCurrentPageForPath(pathname: string): Page | undefined {
       return 'traders'
     case ROUTES.dashboard:
       return 'trader'
+    case ROUTES.copy:
+      return 'copy'
     case ROUTES.strategy:
       return 'strategy'
     case ROUTES.strategyMarket:

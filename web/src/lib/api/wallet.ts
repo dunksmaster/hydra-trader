@@ -1,4 +1,4 @@
-import { API_BASE, handleJSONResponse } from './helpers'
+import { API_BASE, getAuthHeaders, handleJSONResponse } from './helpers'
 
 export interface GeneratedWallet {
   address: string
@@ -45,7 +45,10 @@ export interface HyperliquidAgentResponse {
 
 export const walletApi = {
   async generateWallet(): Promise<GeneratedWallet> {
-    const res = await fetch(`${API_BASE}/wallet/generate`, { method: 'POST' })
+    const res = await fetch(`${API_BASE}/wallet/generate`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
     return handleJSONResponse<GeneratedWallet>(res)
   },
 

@@ -129,6 +129,12 @@ export default function HeaderBar({
                     hidden: true,
                   },
                   {
+                    page: 'copy',
+                    path: ROUTES.copy,
+                    label: language === 'zh' ? 'Copy' : 'Copy',
+                    requiresAuth: true,
+                  },
+                  {
                     page: 'traders',
                     path: ROUTES.traders,
                     label: t('configNav', language),
@@ -409,6 +415,12 @@ export default function HeaderBar({
                             : 'Market',
                       requiresAuth: true,
                       hidden: true,
+                    },
+                    {
+                      page: 'copy',
+                      path: ROUTES.copy,
+                      label: language === 'zh' ? 'Copy' : 'Copy',
+                      requiresAuth: true,
                     },
                     {
                       page: 'traders',

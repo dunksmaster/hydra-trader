@@ -70,7 +70,7 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
         setSelectedModelId(cfg.model_id ?? '')
         if (cfg.is_bound) {
           setStep(2)
-        } else if (cfg.token_masked && cfg.token_masked !== '') {
+        } else if (cfg.configured) {
           setStep(1)
         }
       }
@@ -110,7 +110,7 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
       toast.success(t('telegram.unbound', language))
       const updated = await api.getTelegramConfig()
       setConfig(updated)
-      setStep(updated.token_masked ? 1 : 0)
+      setStep(updated.configured ? 1 : 0)
     } catch {
       toast.error(t('telegram.unbindFailed', language))
     } finally {
@@ -297,7 +297,7 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
                     </div>
                   </div>
 
-                  {config?.token_masked && (
+                  {config?.configured && (
                     <div
                       className="p-3 rounded-xl flex items-center gap-3"
                       style={{ background: '#F1ECE2', border: '1px solid rgba(26,24,19,0.14)' }}
@@ -308,7 +308,7 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
                           {t('telegram.currentToken', language)}
                         </div>
                         <div className="text-sm font-mono" style={{ color: '#1A1813' }}>
-                          {config.token_masked}
+                          ***
                         </div>
                       </div>
                     </div>
@@ -372,7 +372,7 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
                     </div>
                   </div>
 
-                  {config?.token_masked && (
+                  {config?.configured && (
                     <div
                       className="p-3 rounded-xl flex items-center gap-3"
                       style={{ background: '#F1ECE2', border: '1px solid rgba(26,24,19,0.14)' }}
@@ -383,7 +383,7 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
                           Bot Token
                         </div>
                         <div className="text-sm font-mono truncate" style={{ color: '#1A1813' }}>
-                          {config.token_masked}
+                          ***
                         </div>
                       </div>
                     </div>

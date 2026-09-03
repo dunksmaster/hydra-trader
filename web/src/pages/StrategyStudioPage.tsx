@@ -22,7 +22,9 @@ import { confirmToast, notify } from '../lib/notify'
 import type {
   AIStrategyConfig,
   CoinSourceConfig,
+  CopyStrategyConfig,
   IndicatorConfig,
+  KlineConfig,
   RiskControlConfig,
   Strategy,
   StrategyConfig,
@@ -69,8 +71,53 @@ const categoryPriority: Record<string, number> = {
   pre_ipo: 6,
 }
 
-const timeframeOptions = ['5m', '15m', '30m', '1h', '4h', '1d']
+const MAX_TIMEFRAMES = 4
+const timeframeOptions = [
+  '1m',
+  '3m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '2h',
+  '4h',
+  '6h',
+  '8h',
+  '12h',
+  '1d',
+  '3d',
+  '1w',
+]
 const barCountOptions = [20, 30, 50]
+
+function normalizeSelectedTimeframes(klines?: Partial<KlineConfig>): string[] {
+  const fromArray = klines?.selected_timeframes?.filter(Boolean)
+  if (fromArray && fromArray.length > 0) {
+    return fromArray.slice(0, MAX_TIMEFRAMES)
+  }
+  return [klines?.primary_timeframe || '15m']
+}
+
+function buildKlineConfig(
+  klines?: Partial<KlineConfig>,
+  patch?: Partial<KlineConfig>
+): KlineConfig {
+  const merged = { ...klines, ...patch }
+  const selected =
+    patch?.selected_timeframes !== undefined
+      ? normalizeSelectedTimeframes({ selected_timeframes: patch.selected_timeframes })
+      : normalizeSelectedTimeframes(merged)
+  const primary = selected[0] || merged.primary_timeframe || '15m'
+
+  return {
+    primary_timeframe: primary,
+    primary_count: merged.primary_count || 30,
+    longer_timeframe: merged.longer_timeframe || '',
+    longer_count: merged.longer_count || 0,
+    enable_multi_timeframe: selected.length >= 2,
+    selected_timeframes: selected,
+  }
+}
 const topNOptions = [5, 6, 7, 8, 9, 10]
 const detailBandOptions = ['5', '10', '15', '20']
 const claw402BoardLimit = 30
@@ -171,6 +218,8 @@ function defaultCoinSource(
   source?: Partial<CoinSourceConfig>
 ): CoinSourceConfig {
   const staticCoins = source?.static_coins || []
+  const sourceType = source?.source_type || 'vergex_signal'
+  const isHyperRank = sourceType === 'hyper_rank'
   const minVergexLimit =
     staticCoins.length > 0 ? Math.min(staticCoins.length, 10) : 10
   const vergexLimit = Math.min(
@@ -178,24 +227,30 @@ function defaultCoinSource(
     10
   )
   return {
-    source_type: 'vergex_signal',
+    source_type: sourceType,
     static_coins: staticCoins,
-    excluded_coins: [],
-    use_ai500: false,
-    ai500_limit: 0,
-    use_oi_top: false,
-    oi_top_limit: 0,
-    use_oi_low: false,
-    oi_low_limit: 0,
-    use_hyper_all: false,
-    use_hyper_main: false,
-    hyper_main_limit: 0,
-    hyper_rank_category: source?.hyper_rank_category || 'all',
-    hyper_rank_direction: 'gainers',
-    hyper_rank_limit: 0,
-    vergex_limit: vergexLimit,
-    vergex_market_type: source?.vergex_market_type || 'all',
-    vergex_chain: source?.vergex_chain || 'hyperliquid',
+    excluded_coins: source?.excluded_coins || [],
+    use_ai500: source?.use_ai500 ?? false,
+    ai500_limit: source?.ai500_limit || 0,
+    use_oi_top: source?.use_oi_top ?? false,
+    oi_top_limit: source?.oi_top_limit || 0,
+    use_oi_low: source?.use_oi_low ?? false,
+    oi_low_limit: source?.oi_low_limit || 0,
+    use_hyper_all: source?.use_hyper_all ?? false,
+    use_hyper_main: source?.use_hyper_main ?? false,
+    hyper_main_limit: source?.hyper_main_limit || 0,
+    hyper_rank_category:
+      source?.hyper_rank_category || (isHyperRank ? 'crypto' : 'all'),
+    hyper_rank_direction: source?.hyper_rank_direction || 'gainers',
+    hyper_rank_limit:
+      source?.hyper_rank_limit ?? (isHyperRank ? 5 : 0),
+    vergex_limit: isHyperRank ? source?.vergex_limit || 0 : vergexLimit,
+    vergex_market_type: isHyperRank
+      ? source?.vergex_market_type || ''
+      : source?.vergex_market_type || 'all',
+    vergex_chain: isHyperRank
+      ? source?.vergex_chain || ''
+      : source?.vergex_chain || 'hyperliquid',
     vergex_liq_band: source?.vergex_liq_band || '',
   }
 }
@@ -203,37 +258,30 @@ function defaultCoinSource(
 function defaultIndicators(
   indicators?: Partial<IndicatorConfig>
 ): IndicatorConfig {
-  const klines = indicators?.klines || {
-    primary_timeframe: '15m',
-    primary_count: 30,
-    enable_multi_timeframe: false,
-  }
+  const klines = buildKlineConfig(indicators?.klines)
 
   return {
-    klines: {
-      primary_timeframe: klines.primary_timeframe || '15m',
-      primary_count: klines.primary_count || 30,
-      longer_timeframe: '',
-      longer_count: 0,
-      enable_multi_timeframe: false,
-      selected_timeframes: [klines.primary_timeframe || '15m'],
-    },
-    enable_raw_klines: true,
-    enable_ema: false,
-    enable_macd: false,
-    enable_rsi: false,
-    enable_atr: false,
-    enable_boll: false,
-    enable_volume: false,
-    enable_oi: false,
-    enable_funding_rate: false,
-    nofxos_api_key: '',
-    enable_quant_data: false,
-    enable_quant_oi: false,
-    enable_quant_netflow: false,
-    enable_oi_ranking: false,
-    enable_netflow_ranking: false,
-    enable_price_ranking: false,
+    klines,
+    enable_raw_klines: indicators?.enable_raw_klines ?? true,
+    enable_ema: indicators?.enable_ema ?? false,
+    enable_macd: indicators?.enable_macd ?? false,
+    enable_rsi: indicators?.enable_rsi ?? false,
+    enable_atr: indicators?.enable_atr ?? false,
+    enable_boll: indicators?.enable_boll ?? false,
+    enable_volume: indicators?.enable_volume ?? false,
+    enable_oi: indicators?.enable_oi ?? false,
+    enable_funding_rate: indicators?.enable_funding_rate ?? false,
+    ema_periods: indicators?.ema_periods,
+    rsi_periods: indicators?.rsi_periods,
+    atr_periods: indicators?.atr_periods,
+    boll_periods: indicators?.boll_periods,
+    nofxos_api_key: indicators?.nofxos_api_key || '',
+    enable_quant_data: indicators?.enable_quant_data ?? false,
+    enable_quant_oi: indicators?.enable_quant_oi ?? false,
+    enable_quant_netflow: indicators?.enable_quant_netflow ?? false,
+    enable_oi_ranking: indicators?.enable_oi_ranking ?? false,
+    enable_netflow_ranking: indicators?.enable_netflow_ranking ?? false,
+    enable_price_ranking: indicators?.enable_price_ranking ?? false,
   }
 }
 
@@ -254,15 +302,50 @@ function defaultRisk(risk?: Partial<RiskControlConfig>): RiskControlConfig {
     min_confidence: risk?.min_confidence || 78,
     hard_take_profit_margin_pct:
       risk?.hard_take_profit_margin_pct ?? 15,
+    hard_stop_loss_margin_pct: risk?.hard_stop_loss_margin_pct ?? 7.5,
+  }
+}
+
+function defaultCopyConfig(
+  copy?: Partial<CopyStrategyConfig> | null
+): CopyStrategyConfig {
+  return {
+    leader_address: copy?.leader_address || '',
+    copy_mode: copy?.copy_mode || 'fills',
+    size_mode: copy?.size_mode || 'fixed_notional',
+    notional_usd: copy?.notional_usd ?? 15,
+    copy_ratio: copy?.copy_ratio ?? 1,
+    min_notional_usd: copy?.min_notional_usd ?? 12,
+    max_notional_pct: copy?.max_notional_pct ?? 45,
+    max_leverage: copy?.max_leverage ?? 10,
+    max_positions: copy?.max_positions ?? 2,
+    exit_mode: copy?.exit_mode || 'leader_plus_stop',
+    safety_stop_pct: copy?.safety_stop_pct ?? 15,
+    symbol_blocklist: copy?.symbol_blocklist ?? [],
+    reconcile_interval_sec: copy?.reconcile_interval_sec ?? 60,
+    copy_on_start: copy?.copy_on_start ?? true,
+    min_leader_fill_usd: copy?.min_leader_fill_usd ?? 10,
+    dry_run: copy?.dry_run ?? true,
+    inverse: copy?.inverse ?? false,
   }
 }
 
 function simplifyConfig(
   config: StrategyConfig | null | undefined
 ): StrategyConfig {
+  const strategyType = config?.strategy_type || 'ai_trading'
+  if (strategyType === 'copy_trading') {
+    return {
+      strategy_type: 'copy_trading',
+      language: config?.language || 'zh',
+      copy_config: defaultCopyConfig(config?.copy_config),
+      publish_config: config?.publish_config,
+    }
+  }
+
   const ai = config ? getAIConfig(config) : null
   return {
-    strategy_type: 'ai_trading',
+    strategy_type: strategyType === 'grid_trading' ? 'grid_trading' : 'ai_trading',
     language: config?.language || 'zh',
     ai_config: {
       coin_source: defaultCoinSource(ai?.coin_source),
@@ -271,7 +354,7 @@ function simplifyConfig(
       custom_prompt: ai?.custom_prompt || '',
       prompt_sections: ai?.prompt_sections,
     },
-    grid_config: null,
+    grid_config: strategyType === 'grid_trading' ? config?.grid_config || null : null,
     publish_config: config?.publish_config,
   }
 }
@@ -1024,11 +1107,14 @@ export function StrategyStudioPage() {
   const [hasChanges, setHasChanges] = useState(false)
 
   const aiConfig = editingConfig?.ai_config || null
+  const copyConfig = editingConfig?.copy_config || null
+  const isCopyStrategy = editingConfig?.strategy_type === 'copy_trading'
   const coinSource = aiConfig?.coin_source
   const indicators = aiConfig?.indicators
   const risk = aiConfig?.risk_control
   const selectedSymbols = coinSource?.static_coins || []
-  const scope = 'all' as Scope
+  const scope = (coinSource?.hyper_rank_category || 'all') as Scope
+  const isHyperRank = coinSource?.source_type === 'hyper_rank'
   const activeProfile = profileFromRisk(risk)
 
   const signalMap = useMemo(() => {
@@ -1238,6 +1324,21 @@ export function StrategyStudioPage() {
     })
   }
 
+  const patchCopy = (patch: Partial<CopyStrategyConfig>) => {
+    setEditingConfig((prev) => {
+      const base = simplifyConfig(prev)
+      return {
+        ...base,
+        strategy_type: 'copy_trading',
+        copy_config: {
+          ...defaultCopyConfig(base.copy_config),
+          ...patch,
+        },
+      }
+    })
+    setHasChanges(true)
+  }
+
   const patchRisk = (patch: Partial<RiskControlConfig>) => {
     patchAI({
       risk_control: defaultRisk({
@@ -1269,12 +1370,11 @@ export function StrategyStudioPage() {
         }),
         indicators: defaultIndicators({
           ...defaultConfig.ai_config?.indicators,
-          klines: {
+          klines: buildKlineConfig(undefined, {
             primary_timeframe: '15m',
             primary_count: 30,
-            enable_multi_timeframe: false,
             selected_timeframes: ['15m'],
-          },
+          }),
         }),
         risk_control: defaultRisk({
           ...defaultConfig.ai_config?.risk_control,
@@ -1381,12 +1481,11 @@ export function StrategyStudioPage() {
       }),
       indicators: defaultIndicators({
         ...base.ai_config?.indicators,
-        klines: {
+        klines: buildKlineConfig(undefined, {
           primary_timeframe: '15m',
           primary_count: 30,
-          enable_multi_timeframe: false,
           selected_timeframes: ['15m'],
-        },
+        }),
       }),
       risk_control: defaultRisk({
         ...base.ai_config?.risk_control,
@@ -1510,29 +1609,60 @@ export function StrategyStudioPage() {
     patchCoinSource({
       hyper_rank_category: nextScope,
       static_coins: [],
-      vergex_market_type: 'all',
+      ...(isHyperRank
+        ? {
+            source_type: 'hyper_rank' as const,
+            vergex_market_type: '',
+            vergex_chain: '',
+          }
+        : { vergex_market_type: 'all' }),
     })
   }
 
-  const setTimeframe = (timeframe: string) => {
+  const selectedTimeframes = normalizeSelectedTimeframes(indicators?.klines)
+
+  const toggleTimeframe = (timeframe: string) => {
+    const current = normalizeSelectedTimeframes(indicators?.klines)
+    const isSelected = current.includes(timeframe)
+    let next: string[]
+
+    if (isSelected) {
+      if (current.length === 1) {
+        notify.warning(
+          text(
+            language,
+            '至少保留一个时间周期',
+            'Keep at least one timeframe selected'
+          )
+        )
+        return
+      }
+      next = current.filter((item) => item !== timeframe)
+    } else {
+      if (current.length >= MAX_TIMEFRAMES) {
+        notify.warning(
+          text(
+            language,
+            `最多选择 ${MAX_TIMEFRAMES} 个时间周期`,
+            `You can select up to ${MAX_TIMEFRAMES} timeframes`
+          )
+        )
+        return
+      }
+      next = [...current, timeframe]
+    }
+
     patchIndicators({
-      klines: {
-        primary_timeframe: timeframe,
-        primary_count: indicators?.klines.primary_count || 30,
-        enable_multi_timeframe: false,
-        selected_timeframes: [timeframe],
-      },
+      klines: buildKlineConfig(indicators?.klines, {
+        selected_timeframes: next,
+        primary_timeframe: next[0],
+      }),
     })
   }
 
   const setBarCount = (count: number) => {
     patchIndicators({
-      klines: {
-        primary_timeframe: indicators?.klines.primary_timeframe || '15m',
-        primary_count: count,
-        enable_multi_timeframe: false,
-        selected_timeframes: [indicators?.klines.primary_timeframe || '15m'],
-      },
+      klines: buildKlineConfig(indicators?.klines, { primary_count: count }),
     })
   }
 
@@ -1558,12 +1688,11 @@ export function StrategyStudioPage() {
           }),
           indicators: defaultIndicators({
             ...currentAI.indicators,
-            klines: {
+            klines: buildKlineConfig(undefined, {
               primary_timeframe: profile.timeframe,
               primary_count: profile.bars,
-              enable_multi_timeframe: false,
               selected_timeframes: [profile.timeframe],
-            },
+            }),
           }),
           risk_control: defaultRisk({
             ...currentAI.risk_control,
@@ -1663,7 +1792,265 @@ export function StrategyStudioPage() {
         </aside>
 
         <main className="overflow-y-auto p-5">
-          {selectedStrategy && aiConfig && coinSource && indicators && risk ? (
+          {selectedStrategy && isCopyStrategy && copyConfig ? (
+            <div className="mx-auto max-w-3xl space-y-4">
+              <section className="rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg-lighter p-4">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-nofx-text">
+                      {text(language, 'Copy Trading', 'Copy Trading')}
+                    </h2>
+                    <p className="mt-1 text-sm text-nofx-text-muted">
+                      {text(
+                        language,
+                        'Mirrors leader fills via WebSocket in near real time; includes main perps and xyz hip-3.',
+                        'Mirrors leader fills via WebSocket in near real time; includes main perps and xyz hip-3.'
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => saveStrategy()}
+                      disabled={saving}
+                      className="inline-flex items-center gap-2 rounded-lg border border-nofx-gold/40 px-3 py-2 text-sm text-nofx-gold"
+                    >
+                      {saving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}
+                      {text(language, 'Save', 'Save')}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block md:col-span-2">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Leader wallet', 'Leader wallet')}
+                    </span>
+                    <input
+                      value={copyConfig.leader_address}
+                      onChange={(event) =>
+                        patchCopy({ leader_address: event.target.value.trim() })
+                      }
+                      placeholder="0x..."
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Copy mode', 'Copy mode')}
+                    </span>
+                    <select
+                      value={copyConfig.copy_mode || 'fills'}
+                      onChange={(event) =>
+                        patchCopy({
+                          copy_mode: event.target.value as CopyStrategyConfig['copy_mode'],
+                        })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    >
+                      <option value="fills">
+                        {text(language, 'Real-time fills (WebSocket)', 'Real-time fills (WebSocket)')}
+                      </option>
+                      <option value="snapshot">
+                        {text(language, 'Legacy snapshot (5m poll)', 'Legacy snapshot (5m poll)')}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Reconcile interval (sec)', 'Reconcile interval (sec)')}
+                    </span>
+                    <input
+                      type="number"
+                      min={15}
+                      value={copyConfig.reconcile_interval_sec ?? 60}
+                      onChange={(event) =>
+                        patchCopy({ reconcile_interval_sec: Number(event.target.value) })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Size mode', 'Size mode')}
+                    </span>
+                    <select
+                      value={copyConfig.size_mode || 'fixed_notional'}
+                      onChange={(event) =>
+                        patchCopy({
+                          size_mode: event.target.value as CopyStrategyConfig['size_mode'],
+                        })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    >
+                      <option value="fixed_notional">
+                        {text(language, 'Fixed notional', 'Fixed notional')}
+                      </option>
+                      <option value="proportional">
+                        {text(language, 'Proportional', 'Proportional')}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Notional (USD)', 'Notional (USD)')}
+                    </span>
+                    <input
+                      type="number"
+                      min={12}
+                      value={copyConfig.notional_usd ?? 15}
+                      onChange={(event) =>
+                        patchCopy({ notional_usd: Number(event.target.value) })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Max positions', 'Max positions')}
+                    </span>
+                    <select
+                      value={copyConfig.max_positions ?? 2}
+                      onChange={(event) =>
+                        patchCopy({ max_positions: Number(event.target.value) })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    >
+                      {[1, 2, 3, 4, 5].map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Max leverage', 'Max leverage')}
+                    </span>
+                    <select
+                      value={copyConfig.max_leverage ?? 10}
+                      onChange={(event) =>
+                        patchCopy({ max_leverage: Number(event.target.value) })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    >
+                      {[1, 2, 3, 5, 10].map((value) => (
+                        <option key={value} value={value}>
+                          {value}x
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Min leader fill (USD)', 'Min leader fill (USD)')}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={copyConfig.min_leader_fill_usd ?? 10}
+                      onChange={(event) =>
+                        patchCopy({ min_leader_fill_usd: Number(event.target.value) })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    />
+                  </label>
+
+                  <label className="block md:col-span-2">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(
+                        language,
+                        'Symbol blocklist (one prefix per line, empty = all markets)',
+                        'Symbol blocklist (one prefix per line, empty = all markets)'
+                      )}
+                    </span>
+                    <textarea
+                      rows={3}
+                      value={(copyConfig.symbol_blocklist || []).join('\n')}
+                      onChange={(event) =>
+                        patchCopy({
+                          symbol_blocklist: event.target.value
+                            .split('\n')
+                            .map((line) => line.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                      placeholder="xyz:"
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    />
+                  </label>
+
+                  <label className="flex items-center gap-2 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={copyConfig.copy_on_start ?? true}
+                      onChange={(event) =>
+                        patchCopy({ copy_on_start: event.target.checked })
+                      }
+                    />
+                    <span className="text-sm text-nofx-text">
+                      {text(
+                        language,
+                        'Mirror leader open legs on bot start',
+                        'Mirror leader open legs on bot start'
+                      )}
+                    </span>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-nofx-text-muted">
+                      {text(language, 'Exit mode', 'Exit mode')}
+                    </span>
+                    <select
+                      value={copyConfig.exit_mode || 'leader_plus_stop'}
+                      onChange={(event) =>
+                        patchCopy({
+                          exit_mode: event.target.value as CopyStrategyConfig['exit_mode'],
+                        })
+                      }
+                      className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                    >
+                      <option value="leader_plus_stop">
+                        {text(language, 'Leader + safety stop', 'Leader + safety stop')}
+                      </option>
+                      <option value="leader_only">
+                        {text(language, 'Leader only (wide failsafe)', 'Leader only (wide failsafe)')}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label className="flex items-center gap-2 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={copyConfig.dry_run ?? true}
+                      onChange={(event) =>
+                        patchCopy({ dry_run: event.target.checked })
+                      }
+                    />
+                    <span className="text-sm text-nofx-text">
+                      {text(
+                        language,
+                        'Dry run (log deltas only, no orders)',
+                        'Dry run (log deltas only, no orders)'
+                      )}
+                    </span>
+                  </label>
+                </div>
+              </section>
+            </div>
+          ) : selectedStrategy && aiConfig && coinSource && indicators && risk ? (
             <div className="mx-auto max-w-7xl space-y-4">
               <section className="rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg-lighter p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1760,7 +2147,13 @@ export function StrategyStudioPage() {
                       Signal Board
                     </div>
                     <div className="mt-1 text-xs text-nofx-text-muted">
-                      Live Claw402.ai ranking · Signal Lab · liquidation map
+                      {isHyperRank
+                        ? text(
+                            language,
+                            `Live board: Hyperliquid ${coinSource?.hyper_rank_category || 'crypto'} ${coinSource?.hyper_rank_direction || 'volume'} · Top ${coinSource?.hyper_rank_limit || 5}`,
+                            `Live board: Hyperliquid ${coinSource?.hyper_rank_category || 'crypto'} ${coinSource?.hyper_rank_direction || 'volume'} · Top ${coinSource?.hyper_rank_limit || 5}`
+                          )
+                        : 'Live Claw402.ai ranking · Signal Lab · liquidation map'}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1829,6 +2222,84 @@ export function StrategyStudioPage() {
                     ) : null}
                   </div>
                 </div>
+
+                <div className="mb-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      patchCoinSource({
+                        source_type: 'hyper_rank',
+                        hyper_rank_category:
+                          coinSource?.hyper_rank_category === 'all'
+                            ? 'crypto'
+                            : coinSource?.hyper_rank_category || 'crypto',
+                        hyper_rank_direction:
+                          coinSource?.hyper_rank_direction || 'volume',
+                        hyper_rank_limit: coinSource?.hyper_rank_limit || 5,
+                        vergex_limit: 0,
+                        vergex_market_type: '',
+                        vergex_chain: '',
+                        vergex_liq_band: '',
+                      })
+                    }
+                    className={`rounded-lg border px-3 py-2 text-xs transition ${
+                      isHyperRank
+                        ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                        : 'border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper text-nofx-text-muted hover:text-nofx-text'
+                    }`}
+                  >
+                    {text(language, '免费 Hyperliquid 排名', 'Free Hyperliquid rank')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      patchCoinSource({
+                        source_type: 'vergex_signal',
+                        vergex_limit: Math.max(coinSource?.vergex_limit || 10, 5),
+                        vergex_market_type: coinSource?.vergex_market_type || 'all',
+                        vergex_chain: coinSource?.vergex_chain || 'hyperliquid',
+                      })
+                    }
+                    className={`rounded-lg border px-3 py-2 text-xs transition ${
+                      !isHyperRank
+                        ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                        : 'border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper text-nofx-text-muted hover:text-nofx-text'
+                    }`}
+                  >
+                    Claw402 board
+                  </button>
+                </div>
+
+                {isHyperRank ? (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {(
+                      [
+                        ['volume', 'Volume'],
+                        ['gainers', 'Gainers'],
+                        ['losers', 'Losers'],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          patchCoinSource({
+                            source_type: 'hyper_rank',
+                            hyper_rank_direction: value,
+                          })
+                        }
+                        className={`rounded-lg border px-3 py-2 text-xs transition ${
+                          (coinSource?.hyper_rank_direction || 'volume') ===
+                          value
+                            ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                            : 'border-[rgba(26,24,19,0.14)] bg-nofx-bg-deeper text-nofx-text-muted hover:text-nofx-text'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
 
                 <div className="mb-4 flex flex-wrap gap-2">
                   {scopeOptions.map((option) => {
@@ -2205,25 +2676,53 @@ export function StrategyStudioPage() {
                     </div>
                     <div className="space-y-4">
                       <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="text-xs text-nofx-text-muted">
+                            {text(language, 'Timeframes', 'Timeframes')}
+                          </div>
+                          <div className="text-xs text-nofx-text-muted">
+                            {text(
+                              language,
+                              `已选 ${selectedTimeframes.length}/${MAX_TIMEFRAMES}`,
+                              `${selectedTimeframes.length}/${MAX_TIMEFRAMES} selected`
+                            )}
+                          </div>
+                        </div>
                         <div className="mb-2 text-xs text-nofx-text-muted">
-                          {text(language, 'Timeframe', 'Timeframe')}
+                          {text(
+                            language,
+                            '可多选，最多 4 个；第一个为主周期',
+                            'Select up to 4; first selected is primary'
+                          )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {timeframeOptions.map((timeframe) => (
-                            <button
-                              key={timeframe}
-                              type="button"
-                              onClick={() => setTimeframe(timeframe)}
-                              className={`rounded-lg border px-3 py-2 text-sm ${
-                                indicators.klines.primary_timeframe ===
-                                timeframe
-                                  ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
-                                  : 'border-[rgba(26,24,19,0.14)] text-nofx-text-muted hover:text-nofx-text'
-                              }`}
-                            >
-                              {timeframe}
-                            </button>
-                          ))}
+                          {timeframeOptions.map((timeframe) => {
+                            const isSelected =
+                              selectedTimeframes.includes(timeframe)
+                            return (
+                              <button
+                                key={timeframe}
+                                type="button"
+                                onClick={() => toggleTimeframe(timeframe)}
+                                title={
+                                  selectedTimeframes[0] === timeframe
+                                    ? text(
+                                        language,
+                                        '主周期',
+                                        'Primary timeframe'
+                                      )
+                                    : undefined
+                                }
+                                className={`rounded-lg border px-3 py-2 text-sm transition ${
+                                  isSelected
+                                    ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                                    : 'border-[rgba(26,24,19,0.14)] text-nofx-text-muted hover:text-nofx-text'
+                                }`}
+                              >
+                                {timeframe}
+                              </button>
+                            )
+                          })}
                         </div>
                       </div>
                       <div>
@@ -2346,6 +2845,34 @@ export function StrategyStudioPage() {
                               {value === 0
                                 ? text(language, 'Off', 'Off')
                                 : `+${value}%`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs text-nofx-text-muted">
+                          {text(
+                            language,
+                            'Hard SL (margin PnL)',
+                            'Hard SL (margin PnL)'
+                          )}
+                        </span>
+                        <select
+                          value={risk.hard_stop_loss_margin_pct ?? 7.5}
+                          onChange={(event) =>
+                            patchRisk({
+                              hard_stop_loss_margin_pct: Number(
+                                event.target.value
+                              ),
+                            })
+                          }
+                          className="w-full rounded-lg border border-[rgba(26,24,19,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                        >
+                          {[0, 5, 7.5, 10, 15, 25].map((value) => (
+                            <option key={value} value={value}>
+                              {value === 0
+                                ? text(language, 'Off', 'Off')
+                                : `-${value}%`}
                             </option>
                           ))}
                         </select>

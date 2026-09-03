@@ -11,7 +11,7 @@ export interface SystemStatus {
   stop_until: string
   last_reset_time: string
   ai_provider: string
-  strategy_type?: 'ai_trading' | 'grid_trading'
+  strategy_type?: 'ai_trading' | 'grid_trading' | 'copy_trading'
   grid_symbol?: string
   /** Runtime health: true when AI failed repeatedly and no new positions open. */
   safe_mode?: boolean
@@ -125,6 +125,9 @@ export interface TraderInfo {
   show_in_competition?: boolean
   strategy_id?: string
   strategy_name?: string
+  strategy_type?: 'ai_trading' | 'grid_trading' | 'copy_trading'
+  copy_layer?: number
+  copy_paused?: boolean
   custom_prompt?: string
   use_ai500?: boolean
   use_oi_top?: boolean
