@@ -474,3 +474,11 @@ func (es EncryptedString) Value() (driver.Value, error) {
 func (es EncryptedString) String() string {
 	return string(es)
 }
+
+// MarshalJSON prevents accidental serialization of decrypted secrets in API responses.
+func (es EncryptedString) MarshalJSON() ([]byte, error) {
+	if es == "" {
+		return []byte(`""`), nil
+	}
+	return []byte(`"***"`), nil
+}

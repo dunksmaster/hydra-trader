@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"nofx/security"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,8 +17,12 @@ import (
 const (
 	DefaultBaseURL = "https://nofxos.ai"
 	DefaultTimeout = 30 * time.Second
-	DefaultAuthKey = "cm_568c67eae410d912c54c"
 )
+
+// defaultAuthKey returns the NofxOS API key from NOFXOS_API_KEY (required in production).
+func defaultAuthKey() string {
+	return strings.TrimSpace(os.Getenv("NOFXOS_API_KEY"))
+}
 
 // Client is the NofxOS API client
 type Client struct {
@@ -38,7 +43,7 @@ func DefaultClient() *Client {
 	clientOnce.Do(func() {
 		defaultClient = &Client{
 			BaseURL: DefaultBaseURL,
-			AuthKey: DefaultAuthKey,
+			AuthKey: defaultAuthKey(),
 			Timeout: DefaultTimeout,
 		}
 	})
@@ -51,7 +56,7 @@ func NewClient(baseURL, authKey string) *Client {
 		baseURL = DefaultBaseURL
 	}
 	if authKey == "" {
-		authKey = DefaultAuthKey
+		authKey = defaultAuthKey()
 	}
 	return &Client{
 		BaseURL: baseURL,

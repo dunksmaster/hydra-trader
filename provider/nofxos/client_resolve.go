@@ -16,7 +16,7 @@ func ResolveClient(walletKey string) *Client {
 	if walletKey == "" {
 		walletKey = strings.TrimSpace(os.Getenv("CLAW402_WALLET_KEY"))
 	}
-	client := NewClient(DefaultBaseURL, DefaultAuthKey)
+	client := NewClient(DefaultBaseURL, defaultAuthKey())
 	if walletKey == "" {
 		return client
 	}
