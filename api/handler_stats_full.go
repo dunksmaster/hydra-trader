@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,38 +16,20 @@ import (
 // The existing GET /statistics endpoint only returns cycle/position counts; this
 // endpoint exposes the richer trade-quality metrics the terminal dashboard needs.
 func (s *Server) handleStatisticsFull(c *gin.Context) {
+	userID := c.GetString("user_id")
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
 		SafeBadRequest(c, "Invalid trader ID")
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
+	traderIDs, traderIDPatterns, initialBalance, store, ok := s.positionHistoryScope(userID, traderID)
+	if !ok || store == nil {
 		SafeNotFound(c, "Trader")
 		return
 	}
 
-	store := trader.GetStore()
-	if store == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Store not available"})
-		return
-	}
-
-	// Aggregate across the trader's historical IDs exactly like the position
-	// history endpoint (handler_order.go). One-click "NOFX Autopilot" relaunches
-	// create fresh trader rows, but the closed positions stay under the old
-	// generated IDs (which embed userID + "claw402"). Without this, a freshly
-	// relaunched Autopilot would report only the current incarnation's trades
-	// instead of its real lifetime history.
-	userID := c.GetString("user_id")
-	traderIDs := []string{trader.GetID()}
-	var traderIDPatterns []string
-	if strings.EqualFold(strings.TrimSpace(trader.GetName()), "NOFX Autopilot") && strings.TrimSpace(userID) != "" {
-		traderIDPatterns = append(traderIDPatterns, "%_"+userID+"_claw402_%")
-	}
-
-	stats, err := store.Position().GetFullStatsByTraderFilters(traderIDs, traderIDPatterns, trader.GetInitialBalance())
+	stats, err := store.Position().GetFullStatsByTraderFilters(traderIDs, traderIDPatterns, initialBalance)
 	if err != nil {
 		SafeInternalError(c, "Get full statistics", err)
 		return

@@ -317,7 +317,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	}
 
 	// Reload all traders for this user to make new config take effect immediately
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	err = s.traderManager.LoadUserTradersFromStore(s.store, userID, false)
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
 		// Don't return error here since exchange config was successfully updated to database

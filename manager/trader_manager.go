@@ -36,13 +36,32 @@ type TraderManager struct {
 
 // NewTraderManager creates a trader manager
 func NewTraderManager() *TraderManager {
-	return &TraderManager{
+	tm := &TraderManager{
 		traders:    make(map[string]*trader.AutoTrader),
 		loadErrors: make(map[string]error),
 		competitionCache: &CompetitionCache{
 			data: make(map[string]interface{}),
 		},
 	}
+	trader.SetOverflowTargetLookup(func(id string) *trader.AutoTrader {
+		t, err := tm.GetTrader(id)
+		if err != nil {
+			return nil
+		}
+		return t
+	})
+	trader.SetCopySiblingLookup(func(exchangeID string) []*trader.AutoTrader {
+		tm.mu.RLock()
+		defer tm.mu.RUnlock()
+		out := make([]*trader.AutoTrader, 0)
+		for _, t := range tm.traders {
+			if t.GetExchangeID() == exchangeID && t.IsCopyStrategy() {
+				out = append(out, t)
+			}
+		}
+		return out
+	})
+	return tm
 }
 
 // GetLoadError returns the last load error for a trader
@@ -415,6 +434,9 @@ func ensureHyperliquidNativeStrategy(traderName, exchangeType string, cfg *store
 	if cfg == nil || strings.ToLower(strings.TrimSpace(exchangeType)) != "hyperliquid" {
 		return
 	}
+	if cfg.StrategyType == "copy_trading" || cfg.StrategyType == "grid_trading" {
+		return
+	}
 
 	source := strings.ToLower(strings.TrimSpace(cfg.CoinSource.SourceType))
 	if source == "hyper_rank" || source == "vergex_signal" || source == "static" || source == "hyper_all" || source == "hyper_main" {
@@ -439,8 +461,10 @@ func ensureHyperliquidNativeStrategy(traderName, exchangeType string, cfg *store
 	}
 }
 
-// LoadUserTradersFromStore loads traders from store for a specific user to memory
-func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string) error {
+// LoadUserTradersFromStore loads traders from store for a specific user to memory.
+// autoStartRunning should be true only during process boot; API reload paths must pass false
+// so /start does not race with a second Run() goroutine.
+func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string, autoStartRunning bool) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -491,7 +515,9 @@ func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string
 		}
 
 		if aiModelCfg == nil {
-			logger.Infof("⚠️ AI model %s for trader %s does not exist, skipping", traderCfg.AIModelID, traderCfg.Name)
+			err := fmt.Errorf("AI model %q for trader %q does not exist", traderCfg.AIModelID, traderCfg.Name)
+			logger.Errorf("❌ %v", err)
+			tm.loadErrors[traderCfg.ID] = err
 			continue
 		}
 
@@ -521,7 +547,7 @@ func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string
 
 		// Use existing method to load trader
 		logger.Infof("📦 Loading trader %s (AI Model: %s, Exchange: %s/%s, Strategy ID: %s)", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ExchangeType, exchangeCfg.AccountName, traderCfg.StrategyID)
-		err = tm.addTraderFromStore(traderCfg, aiModelCfg, exchangeCfg, st)
+		err = tm.addTraderFromStore(traderCfg, aiModelCfg, exchangeCfg, st, autoStartRunning)
 		if err != nil {
 			logger.Warnf("%s failed to load trader: %v", traderLogTag(traderCfg.ID, traderCfg.Name), err)
 			// Save error for later retrieval
@@ -591,7 +617,9 @@ func (tm *TraderManager) LoadTradersFromStore(st *store.Store) error {
 		}
 
 		if aiModelCfg == nil {
-			logger.Infof("⚠️  AI model %s for trader %s does not exist, skipping", traderCfg.AIModelID, traderCfg.Name)
+			err := fmt.Errorf("AI model %q for trader %q does not exist", traderCfg.AIModelID, traderCfg.Name)
+			logger.Errorf("❌ %v", err)
+			tm.loadErrors[traderCfg.ID] = err
 			continue
 		}
 
@@ -626,7 +654,7 @@ func (tm *TraderManager) LoadTradersFromStore(st *store.Store) error {
 		}
 
 		// Add to TraderManager (ai500APIURL/oiTopAPIURL already obtained from strategy config)
-		err = tm.addTraderFromStore(traderCfg, aiModelCfg, exchangeCfg, st)
+		err = tm.addTraderFromStore(traderCfg, aiModelCfg, exchangeCfg, st, true)
 		if err != nil {
 			logger.Warnf("%s failed to add trader: %v", traderLogTag(traderCfg.ID, traderCfg.Name), err)
 			continue
@@ -638,7 +666,7 @@ func (tm *TraderManager) LoadTradersFromStore(st *store.Store) error {
 }
 
 // addTraderFromStore internal method: adds trader from store configuration
-func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg *store.AIModel, exchangeCfg *store.Exchange, st *store.Store) error {
+func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg *store.AIModel, exchangeCfg *store.Exchange, st *store.Store, autoStartRunning bool) error {
 	if _, exists := tm.traders[traderCfg.ID]; exists {
 		return fmt.Errorf("trader ID '%s' already exists", traderCfg.ID)
 	}
@@ -753,7 +781,7 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		traderConfig.CustomAPIKey = string(aiModelCfg.APIKey)
 	}
 
-	traderConfig.Claw402WalletKey = resolveTraderDataWalletKey(st, traderCfg.UserID, aiModelCfg)
+	traderConfig.Claw402WalletKey = resolveTraderDataWalletKey(st, traderCfg.UserID, aiModelCfg, strategyConfig)
 
 	// Create trader instance
 	at, err := trader.NewAutoTrader(traderConfig, st, traderCfg.UserID)
@@ -775,8 +803,8 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	tm.traders[traderCfg.ID] = at
 	logger.Infof("✓ Trader '%s' (%s + %s/%s) loaded to memory", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ExchangeType, exchangeCfg.AccountName)
 
-	// Auto-start if trader was running before shutdown
-	if traderCfg.IsRunning {
+	// Auto-start if trader was running before shutdown (boot only; API reload passes autoStartRunning=false)
+	if autoStartRunning && traderCfg.IsRunning {
 		logger.Infof("%s 🔄 Auto-starting trader (was running before shutdown)...", traderLogTag(traderCfg.ID, traderCfg.Name))
 		go func(trader *trader.AutoTrader, traderName, traderID, userID string) {
 			if err := trader.Run(); err != nil {
@@ -793,7 +821,33 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	return nil
 }
 
-func resolveTraderDataWalletKey(st *store.Store, userID string, selectedModel *store.AIModel) string {
+// strategyNeedsClaw402Data reports whether paid NofxOS/Vergex boards may run for this strategy.
+func strategyNeedsClaw402Data(cfg *store.StrategyConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	switch cfg.StrategyType {
+	case "copy_trading", "grid_trading":
+		return false
+	}
+	source := cfg.CoinSource
+	switch source.SourceType {
+	case "vergex_signal", "ai500", "oi_top", "oi_low":
+		return true
+	case "mixed":
+		return source.UseAI500 || source.UseOITop || source.UseOILow
+	case "hyper_rank", "static", "hyper_all", "hyper_main":
+		return false
+	default:
+		return source.UseAI500 || source.UseOITop || source.UseOILow
+	}
+}
+
+func resolveTraderDataWalletKey(st *store.Store, userID string, selectedModel *store.AIModel, strategyConfig *store.StrategyConfig) string {
+	if !strategyNeedsClaw402Data(strategyConfig) {
+		return ""
+	}
+
 	// Fast path: selected model is itself a claw402 model.
 	if selectedModel != nil && selectedModel.Provider == "claw402" {
 		if walletKey := string(selectedModel.APIKey); walletKey != "" {

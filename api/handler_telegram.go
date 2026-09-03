@@ -14,37 +14,25 @@ func (s *Server) handleGetTelegramConfig(c *gin.Context) {
 	if err != nil {
 		// Not configured yet - return empty state
 		c.JSON(http.StatusOK, gin.H{
-			"configured":   false,
-			"is_bound":     false,
-			"token_masked": "",
-			"username":     "",
+			"configured": false,
+			"is_bound":   false,
+			"username":   "",
 		})
 		return
 	}
 
-	// Mask bot token for security (show only last 6 chars)
-	tokenMasked := ""
-	if cfg.BotToken != "" {
-		if len(cfg.BotToken) > 6 {
-			tokenMasked = "***" + cfg.BotToken[len(cfg.BotToken)-6:]
-		} else {
-			tokenMasked = "***"
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{
-		"configured":   cfg.BotToken != "",
-		"is_bound":     cfg.ChatID != 0,
-		"username":     cfg.Username,
-		"bound_at":     cfg.BoundAt,
-		"token_masked": tokenMasked,
-		"model_id":     cfg.ModelID,
-		"bind_code":    bindCodeForResponse(s.store, cfg),
+		"configured": cfg.BotToken.String() != "",
+		"is_bound":   cfg.ChatID != 0,
+		"username":   cfg.Username,
+		"bound_at":   cfg.BoundAt,
+		"model_id":   cfg.ModelID,
+		"bind_code":  bindCodeForResponse(s.store, cfg),
 	})
 }
 
 func bindCodeForResponse(st *store.Store, cfg *store.TelegramConfig) string {
-	if cfg.ChatID != 0 || cfg.BotToken == "" {
+	if cfg.ChatID != 0 || cfg.BotToken.String() == "" {
 		return ""
 	}
 	code, err := st.TelegramConfig().EnsureBindCode()
@@ -110,7 +98,7 @@ func (s *Server) handleUpdateTelegramModel(c *gin.Context) {
 		return
 	}
 
-	if err := s.store.TelegramConfig().Save(cfg.BotToken, req.ModelID); err != nil {
+	if err := s.store.TelegramConfig().Save(cfg.BotToken.String(), req.ModelID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save model config"})
 		return
 	}

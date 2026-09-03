@@ -24,7 +24,13 @@ import (
 
 // handleGetGridRiskInfo returns current risk information for a grid trader
 func (s *Server) handleGetGridRiskInfo(c *gin.Context) {
+	userID := c.GetString("user_id")
 	traderID := c.Param("id")
+
+	if _, err := s.store.Trader().GetFullConfig(userID, traderID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "trader not found"})
+		return
+	}
 
 	autoTrader, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
@@ -103,7 +109,7 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	}
 
 	// Reload traders into memory
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	err = s.traderManager.LoadUserTradersFromStore(s.store, userID, false)
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
 	}

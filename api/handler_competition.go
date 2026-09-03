@@ -105,7 +105,7 @@ func (s *Server) handleCompetition(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	// Ensure user's traders are loaded into memory
-	err := s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	err := s.traderManager.LoadUserTradersFromStore(s.store, userID, false)
 	if err != nil {
 		logger.Infof("⚠️ Failed to load traders for user %s: %v", userID, err)
 	}
@@ -403,20 +403,26 @@ func (s *Server) getEquityHistoryForTraders(traderIDs []string, hours int) map[s
 			continue
 		}
 
+		trader, err := s.store.Trader().GetByID(traderID)
+		if err != nil || trader == nil || !trader.ShowInCompetition {
+			errors[traderID] = "Trader not found"
+			continue
+		}
+
 		// Get equity historical data from new equity table
 		var snapshots []*store.EquitySnapshot
-		var err error
+		var snapErr error
 
 		if hours > 0 {
 			// Filter by time range
 			startTime := now.Add(-time.Duration(hours) * time.Hour)
-			snapshots, err = s.store.Equity().GetByTimeRange(traderID, startTime, now)
+			snapshots, snapErr = s.store.Equity().GetByTimeRange(traderID, startTime, now)
 		} else {
 			// Default: get latest 500 records
-			snapshots, err = s.store.Equity().GetLatest(traderID, 500)
+			snapshots, snapErr = s.store.Equity().GetLatest(traderID, 500)
 		}
-		if err != nil {
-			logger.Errorf("[API] Failed to get equity history for %s: %v", traderID, err)
+		if snapErr != nil {
+			logger.Errorf("[API] Failed to get equity history for %s: %v", traderID, snapErr)
 			errors[traderID] = "Failed to get historical data"
 			continue
 		}
@@ -495,6 +501,12 @@ func (s *Server) handleGetPublicTraderConfig(c *gin.Context) {
 	traderID := c.Param("id")
 	if traderID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Trader ID cannot be empty"})
+		return
+	}
+
+	dbTrader, err := s.store.Trader().GetByID(traderID)
+	if err != nil || dbTrader == nil || !dbTrader.ShowInCompetition {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist"})
 		return
 	}
 

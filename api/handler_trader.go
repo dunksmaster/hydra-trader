@@ -320,6 +320,48 @@ func formatTraderStartError(reason, nextStep string) string {
 	return fmt.Sprintf("Failed to start the bot this time: %s. %s.", reason, nextStep)
 }
 
+func (s *Server) validateCopyTraderBinding(fullCfg *store.TraderFullConfig) (errKey, errMsg string) {
+	if fullCfg == nil || fullCfg.Strategy == nil || fullCfg.Exchange == nil {
+		return "", ""
+	}
+	if strategyTypeFromConfig(fullCfg.Strategy) != "copy_trading" {
+		return "", ""
+	}
+	if fullCfg.Exchange.ExchangeType != "hyperliquid" {
+		return "trader.start.copy_requires_hyperliquid", fmt.Sprintf("Bot strategy is copy trading, but exchange \"%s\" is not Hyperliquid", exchangeDisplayName(fullCfg.Exchange))
+	}
+	return "", ""
+}
+
+func (s *Server) isCopyTradingTrader(userID, traderID string) bool {
+	fullCfg, err := s.store.Trader().GetFullConfig(userID, traderID)
+	if err != nil || fullCfg == nil || fullCfg.Strategy == nil {
+		return false
+	}
+	return strategyTypeFromConfig(fullCfg.Strategy) == "copy_trading"
+}
+
+func (s *Server) checkExchangeRunningConflict(userID, traderID, exchangeID string) (errKey, errMsg string) {
+	if exchangeID == "" {
+		return "", ""
+	}
+	traders, err := s.store.Trader().ListByExchangeID(userID, exchangeID)
+	if err != nil {
+		return "", ""
+	}
+	startingCopy := s.isCopyTradingTrader(userID, traderID)
+	for _, t := range traders {
+		if t == nil || t.ID == traderID || !t.IsRunning {
+			continue
+		}
+		if startingCopy && s.isCopyTradingTrader(userID, t.ID) {
+			continue
+		}
+		return "trader.start.exchange_busy", fmt.Sprintf("Exchange account is already in use by running bot \"%s\". Stop it before starting this bot.", t.Name)
+	}
+	return "", ""
+}
+
 // handleCreateTrader Create new AI trader
 func (s *Server) handleCreateTrader(c *gin.Context) {
 	userID := c.GetString("user_id")
@@ -534,7 +576,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	// Immediately load new trader into TraderManager
 	logger.Infof("🔧 DEBUG: Preparing to call LoadUserTraders")
 	startupWarning := ""
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	err = s.traderManager.LoadUserTradersFromStore(s.store, userID, false)
 	if err != nil {
 		logger.Infof("⚠️ Failed to load user traders into memory: %v", err)
 		startupWarning = describeTraderCreationWarning(req.Name, err)
@@ -708,7 +750,7 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	s.traderManager.RemoveTrader(traderID)
 
 	// Reload traders into memory with fresh config
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	err = s.traderManager.LoadUserTradersFromStore(s.store, userID, false)
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
 	}
@@ -790,6 +832,17 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 		return
 	}
 
+	if fullCfg != nil {
+		if errKey, errMsg := s.validateCopyTraderBinding(fullCfg); errMsg != "" {
+			SafeBadRequestWithDetails(c, formatTraderStartError(errMsg, "Use a Hyperliquid exchange account for copy trading bots"), errKey, mapStringPairs("trader_name", traderName))
+			return
+		}
+		if errKey, errMsg := s.checkExchangeRunningConflict(userID, traderID, fullCfg.Trader.ExchangeID); errMsg != "" {
+			SafeBadRequestWithDetails(c, formatTraderStartError(errMsg, "Only one bot may run per exchange account at a time"), errKey, mapStringPairs("trader_name", traderName))
+			return
+		}
+	}
+
 	// Check if trader exists in memory and if it's running
 	existingTrader, _ := s.traderManager.GetTrader(traderID)
 	if existingTrader != nil {
@@ -808,7 +861,7 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 
 	// Load trader from database (always reload to get latest config)
 	logger.Infof("🔄 Loading trader %s from database...", traderID)
-	if loadErr := s.traderManager.LoadUserTradersFromStore(s.store, userID); loadErr != nil {
+	if loadErr := s.traderManager.LoadUserTradersFromStore(s.store, userID, false); loadErr != nil {
 		logger.Infof("❌ Failed to load user traders: %v", loadErr)
 		SafeErrorWithDetails(c, http.StatusInternalServerError, describeTraderStartError(traderName, loadErr), "trader.start.load_failed", traderSetupReasonParams(loadErr, "", "trader_name", traderName), loadErr)
 		return

@@ -245,6 +245,55 @@ func TestTraderLogTag(t *testing.T) {
 	}
 }
 
+func TestStrategyNeedsClaw402Data(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *store.StrategyConfig
+		want bool
+	}{
+		{
+			name: "copy trading never needs claw402 data",
+			cfg: &store.StrategyConfig{
+				StrategyType: "copy_trading",
+				CoinSource:   store.CoinSourceConfig{SourceType: "vergex_signal"},
+			},
+			want: false,
+		},
+		{
+			name: "hyper_rank ai trading is free",
+			cfg: &store.StrategyConfig{
+				StrategyType: "ai_trading",
+				CoinSource:   store.CoinSourceConfig{SourceType: "hyper_rank"},
+			},
+			want: false,
+		},
+		{
+			name: "vergex ai trading needs claw402",
+			cfg: &store.StrategyConfig{
+				StrategyType: "ai_trading",
+				CoinSource:   store.CoinSourceConfig{SourceType: "vergex_signal"},
+			},
+			want: true,
+		},
+		{
+			name: "mixed with ai500 needs claw402",
+			cfg: &store.StrategyConfig{
+				StrategyType: "ai_trading",
+				CoinSource:   store.CoinSourceConfig{SourceType: "mixed", UseAI500: true},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := strategyNeedsClaw402Data(tt.cfg); got != tt.want {
+				t.Errorf("strategyNeedsClaw402Data() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureHyperliquidNativeStrategy(t *testing.T) {
 	t.Run("nil config does not panic", func(t *testing.T) {
 		ensureHyperliquidNativeStrategy("bot", "hyperliquid", nil)
