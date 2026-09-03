@@ -1,8 +1,22 @@
 package trader
 
 import (
+	"nofx/events"
 	"time"
 )
+
+func (at *AutoTrader) emitSystemAlert(alertType, message string) {
+	if at == nil {
+		return
+	}
+	events.EmitSystemAlert(events.SystemAlertEvent{
+		TraderID:   at.id,
+		TraderName: at.name,
+		Type:       alertType,
+		Message:    message,
+		At:         time.Now().UTC(),
+	})
+}
 
 // Runtime health state written by the run-loop goroutine and read by the API
 // layer (GetStatus). Everything here goes through runtimeHealthMu so the

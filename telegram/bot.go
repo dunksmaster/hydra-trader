@@ -40,8 +40,8 @@ func Start(cfg *config.Config, st *store.Store, reloadCh <-chan struct{}) {
 // resolveToken returns the bot token from DB (configured via Web UI), then TELEGRAM_BOT_TOKEN env.
 func resolveToken(cfg *config.Config, st *store.Store) string {
 	dbCfg, err := st.TelegramConfig().Get()
-	if err == nil && dbCfg.BotToken != "" {
-		return dbCfg.BotToken
+	if err == nil && dbCfg.BotToken.String() != "" {
+		return dbCfg.BotToken.String()
 	}
 	return strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 }
@@ -142,6 +142,17 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 				lang := st.TelegramConfig().GetLanguage()
 				handleTraderUseCallback(bot, update.CallbackQuery, st, lang, botUserID, cfg.APIServerPort)
 			}
+			if strings.HasPrefix(update.CallbackQuery.Data, closeTokenPrefix) {
+				resolveBotUser()
+				lang := st.TelegramConfig().GetLanguage()
+				handleCloseCallback(bot, update.CallbackQuery, st, lang, botUserID, cfg.APIServerPort)
+			}
+			if strings.HasPrefix(update.CallbackQuery.Data, riskPositionsPrefix) ||
+				strings.HasPrefix(update.CallbackQuery.Data, riskRefreshPrefix) {
+				resolveBotUser()
+				lang := st.TelegramConfig().GetLanguage()
+				handleRiskCallback(bot, update.CallbackQuery, st, lang, botUserID, cfg.APIServerPort)
+			}
 			continue
 		}
 
@@ -150,6 +161,10 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 		}
 		chatID := update.Message.Chat.ID
 		text := strings.TrimSpace(update.Message.Text)
+
+		if text != "" && (strings.HasPrefix(text, "/") || matchKeyboardShortcut(text) != "") {
+			logger.Infof("Telegram inbound chat=%d text=%q", chatID, text)
+		}
 
 		// ── Language selection (triggered only by /lang) ──────────────────────
 		if awaitingLang && chatID == allowedChatID {
@@ -230,7 +245,7 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 			continue
 		}
 
-		// ── Quick commands (no AI) ───────────────────────────────────────────
+		// ── Quick commands (no AI) — run async so HL/API slowness never blocks the listener ──
 		if isQuickCommand(text) {
 			if allowedChatID != 0 && chatID != allowedChatID {
 				sendMsg(bot, chatID, "Unauthorized.")
@@ -245,7 +260,7 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
 				continue
 			}
-			handleQuickCommand(bot, chatID, text, st, botUserID, cfg.APIServerPort)
+			go runQuickCommand(bot, chatID, text, st, botUserID, cfg.APIServerPort)
 			continue
 		}
 
@@ -262,14 +277,23 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 			continue
 		}
 
-		// ── Plain-text shortcuts (same as /positions, /balanca, etc.) ────────
+		// ── Reply keyboard + plain-text shortcuts (no AI) ───────────────────
+		if shortcut := matchKeyboardShortcut(text); shortcut != "" {
+			resolveBotUser()
+			if botUserID == "" {
+				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
+				continue
+			}
+			go runQuickCommand(bot, chatID, "/"+shortcut, st, botUserID, cfg.APIServerPort)
+			continue
+		}
 		if intent := matchNLQuickIntent(text); intent != "" {
 			resolveBotUser()
 			if botUserID == "" {
 				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
 				continue
 			}
-			handleQuickCommand(bot, chatID, "/"+intent, st, botUserID, cfg.APIServerPort)
+			go runQuickCommand(bot, chatID, "/"+intent, st, botUserID, cfg.APIServerPort)
 			continue
 		}
 
@@ -341,7 +365,19 @@ func runBot(token string, cfg *config.Config, st *store.Store, reloadCh <-chan s
 
 func sendMsg(bot *tgbotapi.BotAPI, chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
-	bot.Send(msg) //nolint:errcheck
+	if _, err := bot.Send(msg); err != nil {
+		logger.Warnf("Telegram send failed chat=%d: %v", chatID, err)
+	}
+}
+
+func runQuickCommand(bot *tgbotapi.BotAPI, chatID int64, cmd string, st *store.Store, botUserID string, apiPort int) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("Telegram quick command panic (%q): %v", cmd, r)
+			sendMsg(bot, chatID, "Command failed — try again in a few seconds.")
+		}
+	}()
+	handleQuickCommand(bot, chatID, cmd, st, botUserID, apiPort)
 }
 
 func sendMarkdownMsg(bot *tgbotapi.BotAPI, chatID int64, text string) {
@@ -367,7 +403,7 @@ func queryKeyboard(lang string) tgbotapi.ReplyKeyboardMarkup {
 		Keyboard: [][]tgbotapi.KeyboardButton{
 			{{Text: "Balanca"}, {Text: "Pozicionet"}},
 			{{Text: "Tregtarët"}, {Text: "Njoftime"}},
-			{{Text: "Web login"}},
+			{{Text: "Orders"}, {Text: "Web login"}},
 		},
 		ResizeKeyboard: true,
 	}
@@ -385,12 +421,51 @@ func sendStatusWithKeyboard(bot *tgbotapi.BotAPI, chatID int64, st *store.Store,
 }
 
 func sendHTMLMsg(bot *tgbotapi.BotAPI, chatID int64, html string) {
-	msg := tgbotapi.NewMessage(chatID, html)
-	msg.ParseMode = "HTML"
-	if _, err := bot.Send(msg); err != nil {
-		plain := tgbotapi.NewMessage(chatID, stripHTML(html))
-		bot.Send(plain) //nolint:errcheck
+	html = strings.TrimSpace(html)
+	if html == "" {
+		logger.Warnf("Telegram: refusing to send empty HTML message to chat %d", chatID)
+		return
 	}
+	for _, chunk := range splitHTMLMessage(html, 3900) {
+		msg := tgbotapi.NewMessage(chatID, chunk)
+		msg.ParseMode = "HTML"
+		if _, err := bot.Send(msg); err != nil {
+			logger.Warnf("Telegram HTML send failed (chat %d): %v — falling back to plain text", chatID, err)
+			plain := tgbotapi.NewMessage(chatID, stripHTML(chunk))
+			if _, plainErr := bot.Send(plain); plainErr != nil {
+				logger.Errorf("Telegram plain send failed (chat %d): %v", chatID, plainErr)
+			}
+		}
+	}
+}
+
+func splitHTMLMessage(html string, maxLen int) []string {
+	if maxLen <= 0 || len(html) <= maxLen {
+		return []string{html}
+	}
+	parts := strings.Split(html, "\n\n────────────\n\n")
+	if len(parts) == 1 {
+		return []string{html[:maxLen]}
+	}
+	var out []string
+	var sb strings.Builder
+	for i, part := range parts {
+		sep := ""
+		if i > 0 {
+			sep = "\n\n────────────\n\n"
+		}
+		candidate := sep + part
+		if sb.Len()+len(candidate) > maxLen && sb.Len() > 0 {
+			out = append(out, sb.String())
+			sb.Reset()
+			candidate = part
+		}
+		sb.WriteString(candidate)
+	}
+	if sb.Len() > 0 {
+		out = append(out, sb.String())
+	}
+	return out
 }
 
 func stripHTML(s string) string {
@@ -398,6 +473,8 @@ func stripHTML(s string) string {
 	s = strings.ReplaceAll(s, "</b>", "")
 	s = strings.ReplaceAll(s, "<i>", "")
 	s = strings.ReplaceAll(s, "</i>", "")
+	s = strings.ReplaceAll(s, "<code>", "")
+	s = strings.ReplaceAll(s, "</code>", "")
 	return s
 }
 
@@ -405,12 +482,20 @@ func registerBotCommands(bot *tgbotapi.BotAPI) {
 	cmds := []tgbotapi.BotCommand{
 		{Command: "start", Description: "Bind account & status"},
 		{Command: "balanca", Description: "Portfolio & balance"},
+		{Command: "pnl", Description: "Trading P&L all bots"},
+		{Command: "history", Description: "Closed trade history"},
 		{Command: "positions", Description: "Open positions detail"},
+		{Command: "orders", Description: "Open orders & fills"},
 		{Command: "traders", Description: "Choose strategy / trader"},
 		{Command: "use", Description: "Switch trader (1, 2, all)"},
 		{Command: "notify", Description: "Alerts on/off/test"},
 		{Command: "lang", Description: "Change language"},
 		{Command: "weblogin", Description: "Sign in to web dashboard"},
+		{Command: "strategy", Description: "Switch copy profile (current/layer1)"},
+		{Command: "leaders", Description: "Copy leaders by L1/L2/L3 layer"},
+		{Command: "leadwallet", Description: "Lead wallet per copy bot"},
+		{Command: "perf", Description: "Copy trader performance stats"},
+		{Command: "fav", Description: "Favorite copy traders"},
 		{Command: "help", Description: "All commands"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(cmds...)
@@ -540,6 +625,7 @@ func statusMsg(st *store.Store, userID string, apiPort int, lang string) string 
 直接说需求，或使用快捷命令：
 
 📊 /positions — 查看持仓
+📜 /history — 已平仓记录
 💰 /balanca — 查看余额
 🔔 /notify — 开/关交易通知
 
@@ -549,8 +635,10 @@ func statusMsg(st *store.Store, userID string, apiPort int, lang string) string 
 
 Just tell me what you want, or use quick commands:
 
-📊 /positions — open positions
+📊 /positions — open positions (tap Close under each coin)
+📜 /history — closed trades (losses marked)
 💰 /balanca — account balance
+🔻 /close — close help (/close all closes everything)
 🤖 /traders — choose strategy
 🔔 /notify — trade alerts on/off
 
@@ -622,14 +710,21 @@ func helpMsg(lang string) string {
 *Commands*
 /balanca — balance
 /positions — open positions
+/history — closed trades (/history losses = losers only)
+/pnl — closed + open PnL summary
+/close — /positions then tap Close (or /close all)
 /traders — choose which strategy to view
 /use — switch trader (1, 2, all)
 /notify — alerts, test, daily, swing
 /notify test — all-strategies snapshot preview
 /notify daily off — disable daily snapshot (once per day)
 /notify swing 5 — uPnL alert threshold
+/leadwallet — leader wallet per copy bot
+/leaders — copy leaders with run status
+/perf — copy trader performance (all bots)
+/fav — favorite performers (/fav add NAME, /fav list)
 
-Free (no claw402 AI cost): /balanca /positions /traders /notify
+Free (no claw402 AI cost): /balanca /positions /history /pnl /summary /close /traders /notify /leadwallet /perf /fav
 Costs USDC: free-text chat (⏳ AI replies) + autopilot trading cycles
 
 /start — refresh status
@@ -655,14 +750,21 @@ Costs USDC: free-text chat (⏳ AI replies) + autopilot trading cycles
 *Commands*
 /balanca — balance
 /positions — open positions
+/history — closed trades (/history losses = losers only)
+/pnl — closed + open PnL summary
+/close — /positions then tap Close (or /close all)
 /traders — choose which strategy to view
 /use — switch trader (1, 2, all)
 /notify — alerts, test, daily, swing
 /notify test — all-strategies snapshot preview
 /notify daily off — disable daily snapshot (once per day)
 /notify swing 5 — uPnL alert threshold
+/leadwallet — leader wallet per copy bot
+/leaders — copy leaders with run status
+/perf — copy trader performance (all bots)
+/fav — favorite performers (/fav add NAME, /fav list)
 
-Free (no claw402 AI cost): /balanca /positions /traders /notify
+Free (no claw402 AI cost): /balanca /positions /history /pnl /summary /close /traders /notify /leadwallet /perf /fav
 Costs USDC: free-text chat (⏳ AI replies) + autopilot trading cycles
 
 /start — refresh status

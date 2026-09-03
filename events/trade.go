@@ -16,16 +16,29 @@ type TradeEvent struct {
 }
 
 var tradeHandler func(TradeEvent)
+var tradeListeners []func(TradeEvent)
 
-// OnTrade registers a callback for trade events. Only one handler is kept.
+// OnTrade registers the primary trade callback (e.g. Telegram notifier).
 func OnTrade(h func(TradeEvent)) {
 	tradeHandler = h
 }
 
-// EmitTrade notifies the registered handler asynchronously.
-func EmitTrade(e TradeEvent) {
-	if tradeHandler == nil {
+// AddTradeListener registers an additional trade callback (not replaced by OnTrade).
+func AddTradeListener(h func(TradeEvent)) {
+	if h == nil {
 		return
 	}
-	go tradeHandler(e)
+	tradeListeners = append(tradeListeners, h)
+}
+
+// EmitTrade notifies registered handlers asynchronously.
+func EmitTrade(e TradeEvent) {
+	if tradeHandler != nil {
+		go tradeHandler(e)
+	}
+	for _, h := range tradeListeners {
+		if h != nil {
+			go h(e)
+		}
+	}
 }

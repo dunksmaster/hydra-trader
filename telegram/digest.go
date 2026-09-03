@@ -55,7 +55,14 @@ func runDigestLoop(st *store.Store, bot *tgbotapi.BotAPI, apiPort int) {
 
 		digest.mu.Lock()
 
-		if st.TelegramConfig().IsDigestEnabled() && digest.lastDailyDate != today && now.Hour() >= 9 {
+		lastDaily := st.TelegramConfig().GetLastDailyDigestDate()
+		if lastDaily == "" {
+			lastDaily = digest.lastDailyDate
+		}
+		if st.TelegramConfig().IsDigestEnabled() && lastDaily != today && now.Hour() >= 9 {
+			if err := st.TelegramConfig().SetLastDailyDigestDate(today); err != nil {
+				logger.Infof("Telegram digest: persist lastDailyDate failed: %v", err)
+			}
 			digest.lastDailyDate = today
 			digest.mu.Unlock()
 			title := fmt.Sprintf("☀️ <b>Daily snapshot</b>  %s UTC", now.Format("15:04"))

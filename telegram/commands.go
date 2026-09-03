@@ -24,7 +24,7 @@ func newQuickClient(apiPort int, jwt string) *quickClient {
 	return &quickClient{
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", apiPort),
 		token:   jwt,
-		client:  &http.Client{Timeout: 15 * time.Second},
+		client:  &http.Client{Timeout: 8 * time.Second},
 	}
 }
 
@@ -50,8 +50,38 @@ func (c *quickClient) get(path string) ([]byte, error) {
 }
 
 func handleQuickCommand(bot *tgbotapi.BotAPI, chatID int64, cmd string, st *store.Store, botUserID string, apiPort int) {
-	lang := st.TelegramConfig().GetLanguage()
 	base := normalizeQuickCommand(cmd)
+	lang := st.TelegramConfig().GetLanguage()
+
+	// Ack immediately so the user sees a reply before any API work (HL rate limits can be slow).
+	switch base {
+	case "positions", "pozicione", "pozicionet", "pos", "postion", "positon", "position":
+		if lang == "zh" {
+			sendMsg(bot, chatID, "📈 正在加载持仓…")
+		} else {
+			sendMsg(bot, chatID, "📈 Loading positions…")
+		}
+	case "order", "orders", "ordegs", "urdhra":
+		if lang == "zh" {
+			sendMsg(bot, chatID, "📋 正在加载订单…")
+		} else {
+			sendMsg(bot, chatID, "📋 Loading orders…")
+		}
+	case "balance", "balanca", "balanc":
+		if lang == "zh" {
+			sendMsg(bot, chatID, "💰 正在加载余额…")
+		} else {
+			sendMsg(bot, chatID, "💰 Loading balance…")
+		}
+	}
+
+	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+	bot.Send(typing) //nolint:errcheck
+
+	if strings.HasPrefix(base, closeCommandPrefix) && parseCloseTokenID(base) != "" {
+		handleCloseTokenCommand(bot, chatID, cmd, botUserID, apiPort)
+		return
+	}
 
 	switch base {
 	case "notify", "njoftimet", "njoftime":
@@ -71,6 +101,21 @@ func handleQuickCommand(bot *tgbotapi.BotAPI, chatID int64, cmd string, st *stor
 	case "weblogin", "web":
 		handleWebLoginCommand(bot, chatID, st, botUserID)
 		return
+	case "strategy":
+		handleStrategyCommand(bot, chatID, cmd, st, botUserID)
+		return
+	case "leaders":
+		handleLeadersCommand(bot, chatID, st, botUserID, apiPort)
+		return
+	case "leadwallet", "lead":
+		handleLeadWalletCommand(bot, chatID, st, botUserID, apiPort)
+		return
+	case "traderperformance", "traderperf", "perf":
+		handleTraderPerformanceCommand(bot, chatID, st, botUserID, apiPort)
+		return
+	case "favorite", "fav":
+		handleFavoriteCommand(bot, chatID, cmd, st, botUserID, apiPort)
+		return
 	}
 
 	jwt, err := agent.GenerateBotToken(botUserID)
@@ -82,22 +127,72 @@ func handleQuickCommand(bot *tgbotapi.BotAPI, chatID int64, cmd string, st *stor
 
 	switch base {
 	case "balance", "balanca", "balanc":
-		portfolios, err := fetchPortfoliosForSelection(st, client)
+		portfolios, err := fetchAllTraderPortfolios(client)
 		if err != nil {
 			sendMsg(bot, chatID, "Could not fetch balance: "+err.Error())
 			return
 		}
 		sendHTMLMsg(bot, chatID, formatBalanceForPortfolios(portfolios, lang))
-	case "positions", "pozicione", "pozicionet", "pos":
-		portfolios, err := fetchPortfoliosForSelection(st, client)
+	case "positions", "pozicione", "pozicionet", "pos", "postion", "positon", "position":
+		portfolios, err := fetchVenuePortfoliosForTelegram(client)
 		if err != nil {
 			sendMsg(bot, chatID, "Could not fetch positions: "+err.Error())
 			return
 		}
-		sendHTMLMsg(bot, chatID, formatPositionsForPortfolios(portfolios, lang))
+		sendPositionCards(bot, chatID, portfolios, lang)
+	case "order", "orders", "ordegs", "urdhra":
+		portfolios, err := fetchAllTraderPortfoliosLite(client)
+		if err != nil {
+			sendMsg(bot, chatID, "Could not fetch orders: "+err.Error())
+			return
+		}
+		ordersByVenue := fetchVenueOrdersMerged(client, portfolios, 30)
+		sendHTMLMsg(bot, chatID, formatVenueOrdersReport(portfolios, ordersByVenue, lang))
+	case "pnl", "profit", "performance":
+		portfolios, err := fetchAllTraderPortfolios(client)
+		if err != nil {
+			sendMsg(bot, chatID, "Could not fetch PnL: "+err.Error())
+			return
+		}
+		sendHTMLMsg(bot, chatID, formatVenuePnLReport(portfolios, lang))
+	case "history", "histori", "trades", "closed":
+		lossesOnly := historyLossesOnly(cmd)
+		histories, err := fetchAllTraderHistories(client, 25)
+		if err != nil {
+			sendMsg(bot, chatID, "Could not fetch trade history: "+err.Error())
+			return
+		}
+		sendHTMLMsg(bot, chatID, formatVenueHistoryReport(histories, lang, lossesOnly))
+	case "summary", "dash", "dashboard":
+		portfolios, err := fetchAllTraderPortfolios(client)
+		if err != nil {
+			sendMsg(bot, chatID, "Could not fetch summary: "+err.Error())
+			return
+		}
+		histories, err := fetchAllTraderHistories(client, 15)
+		if err != nil {
+			sendMsg(bot, chatID, "Could not fetch history: "+err.Error())
+			return
+		}
+		sendHTMLMsg(bot, chatID, formatAccountSummaryReport(portfolios, histories, lang))
+	case "copystatus", "copy":
+		sendHTMLMsg(bot, chatID, formatCopyStatusReport(client, lang))
+	case "close", "mbyll", "closeposition":
+		handleCloseCommand(bot, chatID, cmd, st, lang, botUserID, apiPort)
 	default:
 		return
 	}
+}
+
+func historyLossesOnly(cmd string) bool {
+	fields := strings.Fields(strings.TrimSpace(strings.ToLower(cmd)))
+	for _, f := range fields[1:] {
+		switch f {
+		case "losses", "loss", "humbje", "lost", "negative":
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeQuickCommand(cmd string) string {
@@ -118,8 +213,21 @@ func isQuickCommand(text string) bool {
 		return false
 	}
 	base := normalizeQuickCommand(fields[0])
+	if strings.HasPrefix(base, closeCommandPrefix) && parseCloseTokenID(base) != "" {
+		return true
+	}
 	switch base {
 	case "balance", "balanca", "balanc", "positions", "pozicione", "pozicionet", "pos",
+		"postion", "positon", "position",
+		"order", "orders", "ordegs", "urdhra",
+		"pnl", "profit", "performance",
+		"history", "histori", "trades", "closed",
+		"summary", "dash", "dashboard",
+		"copystatus", "copy",
+		"traderperformance", "traderperf", "perf",
+		"favorite", "fav",
+		"strategy", "leaders", "leadwallet", "lead",
+		"close", "mbyll", "closeposition",
 		"traders", "tregtar", "notify", "njoftimet", "njoftime", "use", "weblogin", "web":
 		return true
 	}
@@ -140,16 +248,55 @@ func matchNLQuickIntent(text string) string {
 	):
 		return "weblogin"
 	case containsAny(norm,
-		"show my positions", "show positions", "my positions", "open positions",
-		"what are my positions", "what's my positions", "list my positions",
-		"current positions", "pozicionet e mia", "pozicionet", "pozicione",
+		"close my position", "close position", "close my trade", "take profit", "take profits",
+		"close all positions", "close everything", "sell my position", "exit trade",
+		"mbyll pozicionin",
 	):
+		return "close"
+	case norm == "orders" || norm == "order" || norm == "ordegs" || norm == "urdhra",
+		containsAny(norm,
+			"show my orders", "my orders", "open orders", "open order",
+			"list my orders", "show orders", "urdhra",
+		):
+		return "orders"
+	case norm == "positions" || norm == "position" || norm == "pos" ||
+		norm == "pozicionet" || norm == "pozicione",
+		containsAny(norm,
+			"show my positions", "show positions", "my positions", "open positions",
+			"what are my positions", "what's my positions", "list my positions",
+			"current positions", "check positions", "check my positions",
+			"how are my positions", "positions now", "all positions",
+			"positions summary", "position data",
+			"pozicionet e mia", "pozicionet", "pozicione",
+		):
 		return "positions"
 	case containsAny(norm,
 		"show my balance", "my balance", "what's my balance", "what is my balance",
 		"account balance", "show balance", "balanca ime", "balanca", "balanc",
 	):
 		return "balance"
+	case containsAny(norm,
+		"my pnl", "my p&l", "show pnl", "show profit", "how much profit", "how much loss",
+		"am i winning", "am i losing", "am i up", "am i down", "how am i doing",
+		"trading performance", "how much have i lost", "how much have i won",
+		"how much did i lose", "how much did i win", "total pnl", "total profit",
+		"perfomance", "performance",
+	):
+		return "pnl"
+	case containsAny(norm,
+		"account summary", "trading summary", "summary", "dashboard",
+	):
+		return "summary"
+	case containsAny(norm,
+		"trades i lost", "losing trades", "show losses", "my losses", "lost trades",
+		"tregtite qe humba",
+	):
+		return "history losses"
+	case containsAny(norm,
+		"trade history", "closed trades", "closed trade", "past trades", "my trades",
+		"historia", "histori e tregtis",
+	):
+		return "history"
 	case containsAny(norm,
 		"list my traders", "show my traders", "my traders", "list traders",
 		"tregtarët e mi", "tregtar",
@@ -159,8 +306,42 @@ func matchNLQuickIntent(text string) string {
 		"notifications", "notify", "njoftime", "njoftimet",
 	):
 		return "notify"
+	case containsAny(norm,
+		"lead wallet", "lead wallets", "leader wallet", "leader wallets",
+		"which leaders", "copy leaders", "who am i copying",
+	):
+		return "leadwallet"
+	case containsAny(norm,
+		"copy trader performance", "trader performance", "who is performing",
+		"best copy trader", "compare copy traders", "copy bot performance",
+	):
+		return "perf"
+	case containsAny(norm,
+		"favorites", "my favorites", "favorite traders", "fav list",
+	):
+		return "fav list"
 	}
 	return ""
+}
+
+// matchKeyboardShortcut maps reply-keyboard labels (no leading /) to quick commands.
+func matchKeyboardShortcut(text string) string {
+	switch strings.TrimSpace(text) {
+	case "Pozicionet", "查看持仓":
+		return "positions"
+	case "Balanca", "查看余额":
+		return "balance"
+	case "Orders", "Order":
+		return "orders"
+	case "Tregtarët", "我的交易员":
+		return "traders"
+	case "Njoftime":
+		return "notify"
+	case "Web login":
+		return "weblogin"
+	default:
+		return ""
+	}
 }
 
 func containsAny(s string, phrases ...string) bool {
