@@ -18,15 +18,6 @@ RUN CGO_ENABLED=1 GOOS=linux \
     CGO_CFLAGS="-D_LARGEFILE64_SOURCE" \
     go build -trimpath -ldflags="-s -w" -o nofx .
 
-FROM node:20-alpine AS frontend-builder
-
-WORKDIR /build
-COPY web/package*.json ./
-RUN npm ci
-
-COPY web/ ./
-RUN npm run build
-
 FROM alpine:latest
 
 RUN apk add --no-cache ca-certificates tzdata sqlite nginx openssl gettext
@@ -35,7 +26,8 @@ COPY --from=backend-builder /app/nofx /app/nofx
 COPY --from=backend-libs /usr/local/lib/libta_lib* /usr/local/lib/
 RUN ldconfig /usr/local/lib 2>/dev/null || true
 
-COPY --from=frontend-builder /build/dist /usr/share/nginx/html
+# Keep the live Signal Board UI; local web/ is older and would 404-fix by deleting the page.
+COPY railway/preserved-frontend /usr/share/nginx/html
 
 WORKDIR /app
 RUN mkdir -p /app/data

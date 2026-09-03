@@ -13,6 +13,7 @@ import (
 	_ "nofx/mcp/provider"
 	"nofx/store"
 	"nofx/telegram"
+	"nofx/trader"
 	"nofx/telemetry"
 	"os"
 	"os/signal"
@@ -172,6 +173,7 @@ func main() {
 		}
 	}()
 
+	trader.InitCopyLossGuard(st)
 	go telegram.Start(cfg, st, telegramReloadCh)
 
 	// Wait for interrupt signal
