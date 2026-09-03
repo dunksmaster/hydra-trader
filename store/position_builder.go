@@ -41,8 +41,8 @@ func (pb *PositionBuilder) ProcessTrade(
 		return err
 	} else if strings.HasPrefix(action, "close_") {
 		partial, err := pb.handleClose(traderID, exchangeID, exchangeType, symbol, side, quantity, price, fee, realizedPnL, tradeTimeMs, orderID)
-		if err == nil && partial != nil {
-			pb.emitTrade(traderID, exchangeType, symbol, side, action, quantity, price, partial.realizedPnL, orderID, 0, partial.partial)
+		if err == nil && partial != nil && !partial.partial {
+			pb.emitTrade(traderID, exchangeType, symbol, side, action, quantity, price, partial.realizedPnL, orderID, 0, false)
 		}
 		return err
 	}

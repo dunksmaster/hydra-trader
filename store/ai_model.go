@@ -153,12 +153,46 @@ func (s *AIModelStore) firstEnabledUsable(userID string) (*AIModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i := range models {
-		if hasUsableAPIKey(models[i]) {
-			return &models[i], nil
-		}
+	if got := pickPreferredEnabledModel(models); got != nil {
+		return got, nil
 	}
 	return nil, gorm.ErrRecordNotFound
+}
+
+// pickPreferredEnabledModel prefers NVIDIA, then any native (non-claw402)
+// model, and only falls back to claw402 when nothing else is usable.
+func pickPreferredEnabledModel(models []AIModel) *AIModel {
+	var nvidia *AIModel
+	var native *AIModel
+	var claw402 *AIModel
+	for i := range models {
+		model := &models[i]
+		if !model.Enabled || !hasUsableAPIKey(*model) {
+			continue
+		}
+		if IsNVIDIAModel(model) {
+			if nvidia == nil {
+				nvidia = model
+			}
+			continue
+		}
+		if isClaw402Provider(model.Provider) {
+			if claw402 == nil {
+				claw402 = model
+			}
+			continue
+		}
+		if native == nil {
+			native = model
+		}
+	}
+	if nvidia != nil {
+		return nvidia
+	}
+	if native != nil {
+		return native
+	}
+	return claw402
 }
 
 // GetAnyEnabled returns the first enabled AI model across all users.
@@ -171,10 +205,8 @@ func (s *AIModelStore) GetAnyEnabled() (*AIModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i := range models {
-		if hasUsableAPIKey(models[i]) {
-			return &models[i], nil
-		}
+	if got := pickPreferredEnabledModel(models); got != nil {
+		return got, nil
 	}
 	return nil, gorm.ErrRecordNotFound
 }

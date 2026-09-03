@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"nofx/crypto"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,7 @@ import (
 // TelegramConfig stores the Telegram bot binding (single row, always ID=1)
 type TelegramConfig struct {
 	ID        uint      `gorm:"primaryKey"`
-	BotToken  string    `gorm:"column:bot_token"`
+	BotToken  crypto.EncryptedString `gorm:"column:bot_token"`
 	ChatID    int64     `gorm:"column:chat_id"`
 	Username  string    `gorm:"column:username"` // @username for display
 	BoundAt   time.Time `gorm:"column:bound_at"`
@@ -25,7 +26,9 @@ type TelegramConfig struct {
 	NotifyEnabled     bool    `gorm:"column:notify_enabled;default:true"`    // Push trade alerts to bound chat
 	DigestEnabled     bool    `gorm:"column:digest_enabled;default:true"`    // Daily snapshot + swing alerts
 	PnlSwingThreshold float64 `gorm:"column:pnl_swing_threshold;default:5"`  // uPnL move threshold (USD)
-	SelectedTraderID  string  `gorm:"column:selected_trader_id;default:''"`  // "" or "*" = all; else one trader_id
+	SelectedTraderID     string `gorm:"column:selected_trader_id;default:''"`      // "" or "*" = all; else one trader_id
+	FavoriteTraderIDs    string `gorm:"column:favorite_trader_ids;default:''"`     // comma-separated trader_id list (Telegram /fav)
+	LastDailyDigestDate  string `gorm:"column:last_daily_digest_date;default:''"` // UTC date YYYY-MM-DD last snapshot was sent
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -33,7 +36,7 @@ type TelegramConfig struct {
 // String returns a safe string representation of TelegramConfig with the token masked.
 func (tc TelegramConfig) String() string {
 	token := "***"
-	if tc.BotToken == "" {
+	if tc.BotToken.String() == "" {
 		token = "<not set>"
 	}
 	return fmt.Sprintf("TelegramConfig{ID:%d, ChatID:%d, Username:%q, BotToken:%s, BoundAt:%v}",
@@ -60,6 +63,11 @@ type TelegramConfigStore interface {
 	SetPnlSwingThreshold(threshold float64) error
 	GetSelectedTraderID() string
 	SetSelectedTraderID(traderID string) error
+	GetLastDailyDigestDate() string
+	SetLastDailyDigestDate(date string) error
+	GetFavoriteTraderIDs() []string
+	AddFavoriteTraderID(traderID string) error
+	RemoveFavoriteTraderID(traderID string) error
 }
 
 type telegramConfigStore struct {
@@ -85,6 +93,22 @@ func (s *telegramConfigStore) initTables() error {
 			INSERT INTO system_config (key, value) VALUES (?, ?)
 			ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 			"telegram_notify_migrated", "1")
+	}
+	// One-time migration: re-encrypt plaintext bot_token rows at rest.
+	var tokenMigrated string
+	s.db.Raw("SELECT value FROM system_config WHERE key = ?", "telegram_token_encrypted").Scan(&tokenMigrated)
+	if tokenMigrated != "1" {
+		var cfg TelegramConfig
+		if err := s.db.First(&cfg, 1).Error; err == nil && cfg.BotToken.String() != "" {
+			// Save triggers EncryptedString.Value() encryption.
+			if err := s.db.Save(&cfg).Error; err != nil {
+				return fmt.Errorf("telegram token encryption migration: %w", err)
+			}
+		}
+		s.db.Exec(`
+			INSERT INTO system_config (key, value) VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			"telegram_token_encrypted", "1")
 	}
 	return nil
 }
@@ -112,7 +136,7 @@ func (s *telegramConfigStore) Save(botToken, modelID string) error {
 		return result.Error
 	}
 	cfg.ID = 1
-	cfg.BotToken = botToken
+	cfg.BotToken = crypto.EncryptedString(botToken)
 	cfg.ModelID = modelID
 	if cfg.ChatID == 0 && cfg.BindCode == "" {
 		cfg.BindCode = newBindCode()
@@ -343,5 +367,134 @@ func (s *telegramConfigStore) SetSelectedTraderID(traderID string) error {
 	}
 	cfg.ID = 1
 	cfg.SelectedTraderID = traderID
+	return s.db.Save(&cfg).Error
+}
+
+func (s *telegramConfigStore) GetLastDailyDigestDate() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var cfg TelegramConfig
+	if err := s.db.First(&cfg, 1).Error; err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.LastDailyDigestDate)
+}
+
+func (s *telegramConfigStore) SetLastDailyDigestDate(date string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	result := s.db.First(&cfg, 1)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	cfg.ID = 1
+	cfg.LastDailyDigestDate = strings.TrimSpace(date)
+	return s.db.Save(&cfg).Error
+}
+
+func parseFavoriteTraderIDs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func serializeFavoriteTraderIDs(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return strings.Join(out, ",")
+}
+
+func (s *telegramConfigStore) GetFavoriteTraderIDs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var cfg TelegramConfig
+	if err := s.db.First(&cfg, 1).Error; err != nil {
+		return nil
+	}
+	return parseFavoriteTraderIDs(cfg.FavoriteTraderIDs)
+}
+
+func (s *telegramConfigStore) AddFavoriteTraderID(traderID string) error {
+	traderID = strings.TrimSpace(traderID)
+	if traderID == "" {
+		return fmt.Errorf("empty trader id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	result := s.db.First(&cfg, 1)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	ids := parseFavoriteTraderIDs(cfg.FavoriteTraderIDs)
+	for _, id := range ids {
+		if id == traderID {
+			return nil
+		}
+	}
+	ids = append(ids, traderID)
+	cfg.ID = 1
+	cfg.FavoriteTraderIDs = serializeFavoriteTraderIDs(ids)
+	return s.db.Save(&cfg).Error
+}
+
+func (s *telegramConfigStore) RemoveFavoriteTraderID(traderID string) error {
+	traderID = strings.TrimSpace(traderID)
+	if traderID == "" {
+		return fmt.Errorf("empty trader id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	result := s.db.First(&cfg, 1)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	ids := parseFavoriteTraderIDs(cfg.FavoriteTraderIDs)
+	next := make([]string, 0, len(ids))
+	found := false
+	for _, id := range ids {
+		if id == traderID {
+			found = true
+			continue
+		}
+		next = append(next, id)
+	}
+	if !found {
+		return fmt.Errorf("not in favorites")
+	}
+	cfg.ID = 1
+	cfg.FavoriteTraderIDs = serializeFavoriteTraderIDs(next)
 	return s.db.Save(&cfg).Error
 }
