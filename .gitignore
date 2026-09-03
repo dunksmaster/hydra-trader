@@ -142,3 +142,7 @@ PR_DESCRIPTION.md
 .agents/
 skills-lock.json
 img.png
+
+# graphify analysis cache (local tooling artifacts, not source)
+graphify-out/
+trader/graphify-out/
