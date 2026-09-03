@@ -1,282 +1,224 @@
-<p align="center"><strong>Backed by <a href="https://vergex.trade">vergex.trade</a></strong></p>
+# Hydra Trader
 
-<p align="center">
-  <img src="docs/assets/nofx-banner.svg" alt="NOFX — AI trading terminal" width="100%"/>
-</p>
+### A fork of [NoFxAiOS/nofx](https://github.com/NoFxAiOS/nofx), extended with a multi-leader Hyperliquid copy-trading engine
 
-<p align="center">
-  <a href="https://github.com/NoFxAiOS/nofx/stargazers"><img src="https://img.shields.io/github/stars/NoFxAiOS/nofx?style=flat-square&labelColor=1A1813&color=E0483B" alt="Stars"></a>
-  <a href="https://github.com/NoFxAiOS/nofx/releases"><img src="https://img.shields.io/github/v/release/NoFxAiOS/nofx?style=flat-square&labelColor=1A1813&color=E0483B" alt="Release"></a>
-  <a href="https://github.com/NoFxAiOS/nofx/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E0483B?style=flat-square&labelColor=1A1813" alt="License"></a>
-  <a href="https://t.me/nofx_dev_community"><img src="https://img.shields.io/badge/telegram-community-E0483B?style=flat-square&labelColor=1A1813&logo=telegram&logoColor=white" alt="Telegram"></a>
-</p>
+## Table of Contents
 
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="docs/i18n/zh-CN/README.md">中文</a> ·
-  <a href="docs/i18n/ja/README.md">日本語</a> ·
-  <a href="docs/i18n/ko/README.md">한국어</a> ·
-  <a href="docs/i18n/ru/README.md">Русский</a> ·
-  <a href="docs/i18n/uk/README.md">Українська</a> ·
-  <a href="docs/i18n/vi/README.md">Tiếng Việt</a>
-</p>
+- [Summary](#summary)
+- [Technologies](#technologies)
+- [Setup](#setup)
+  - [Prerequisites](#prerequisites)
+  - [Instructions](#instructions)
+- [Features](#features)
+- [Architecture](#architecture)
+  - [AI-decision trading](#ai-decision-trading)
+  - [Copy trading](#copy-trading)
+- [How It Works](#how-it-works)
+  - [Leader-fill mirroring and deduplication](#leader-fill-mirroring-and-deduplication)
+  - [Two-tier position caps](#two-tier-position-caps)
+  - [Overflow queue](#overflow-queue)
+  - [Telegram alerting](#telegram-alerting)
+  - [Hard exits](#hard-exits)
+- [Known Limitations](#known-limitations)
+- [Status](#status)
+- [License and Credits](#license-and-credits)
 
-<br/>
+## Summary
 
-NOFX is an open-source trading terminal where the strategy is a language model. Each trader runs a continuous loop — read market structure, decide, execute, record the reasoning — while a Go runtime clamps every order to hard risk limits the model cannot override.
+Hydra Trader is an AI-decision crypto trading system built on top of
+[NOFX](https://github.com/NoFxAiOS/nofx), an open-source multi-AI-model trading
+platform. Upstream NOFX gives a trader an AI model, an exchange connection,
+and a strategy; this fork keeps that core and adds a second trading mode on
+top of it — a multi-leader Hyperliquid copy-trading engine that mirrors one
+or more leader wallets' live fills into a follower account, with its own
+position caps, deduplication, and failure handling.
 
-Traders compose freely: any model, any of nine exchanges, any strategy. Run several side by side and compare them on a public leaderboard by realized return. Everything runs on your own machine; exchange credentials are encrypted at rest and never leave it.
+The name comes from that second mode: one account can run a single
+AI-decision trader on Bitget alongside a fleet of independent copy-trading
+"heads," each mirroring a different Hyperliquid leader wallet, all sharing
+one margin pool with a wallet-wide safety cap that no individual head can
+exceed — one account, many heads.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
-```
+This repository is published as a reference implementation, not a running
+service. The project traded real capital on Bitget and Hyperliquid from
+mid-August through early September 2026, and was deliberately wound down:
+all cloud infrastructure has been decommissioned and every exchange API key
+used by this project has been revoked. What's here is the actual code that
+ran, organized into a clean commit history, for anyone who wants to read it,
+run it locally in a paper-trading/backtest capacity, or build on it.
 
-The terminal opens at `http://127.0.0.1:3000`.
+This is a fork under the same license as upstream. See
+[License and Credits](#license-and-credits) before using any part of it.
 
-**First run**
+## Technologies
 
-1. Register — the first account becomes the owner of the instance.
-2. Follow the guided launch: put **$1+ USDC** (Base network) in the AI fee wallet it creates for you, then connect Hyperliquid and deposit **$12+ USDC** to trade with.
-3. Start **Autopilot**. The AI scans the market every few minutes and trades on its own; every decision appears on the dashboard as it happens. Stop it anytime with one click.
+- **Go 1.25** — backend: trading engine, exchange integrations, REST API
+- **React 18 + TypeScript 5** — frontend dashboard, built with Vite
+- **Tailwind CSS** — frontend styling
+- **GORM**, with **SQLite** (default, file-based) or **PostgreSQL** (configurable) — persistence
+- **Bitget UTA v3 API** — Unified Trading Account perpetuals
+- **Hyperliquid API + WebSocket** — perpetuals trading and live leader-fill streaming
+- **Telegram Bot API** — alerts and interactive bot control
+- **Docker** — `docker/Dockerfile.backend` and `docker/Dockerfile.frontend` for a standard two-container deploy
 
-<br/>
+## Setup
 
-## Register exchanges
+### Prerequisites
 
-NOFX is free and open source. Opening an account through the partner links below carries reduced trading fees and funds continued development.
+- [Go](https://go.dev/dl/) 1.25 or later
+- [Node.js](https://nodejs.org/) 20 or later, for the `web/` frontend
+- [Docker](https://www.docker.com/) and Docker Compose, if you want a containerized run instead of running the backend and frontend directly
 
-| Exchange                                                                                                                      | Status | Register with fee discount                                                          |
-| :---------------------------------------------------------------------------------------------------------------------------- | :----: | :---------------------------------------------------------------------------------- |
-| <img src="web/public/exchange-icons/binance.jpg" width="20" height="20" style="vertical-align: middle;"/> **Binance**       |   ✅   | [Register](https://www.binance.com/join?ref=NOFXENG)                                |
-| <img src="web/public/exchange-icons/bybit.png" width="20" height="20" style="vertical-align: middle;"/> **Bybit**           |   ✅   | [Register](https://partner.bybit.com/b/83856)                                       |
-| <img src="web/public/exchange-icons/okx.svg" width="20" height="20" style="vertical-align: middle;"/> **OKX**               |   ✅   | [Register](https://www.okx.com/join/1865360)                                        |
-| <img src="web/public/exchange-icons/hyperliquid.png" width="20" height="20" style="vertical-align: middle;"/> **Hyperliquid** |   ✅   | [Register](https://app.hyperliquid.xyz/join/AITRADING)                              |
-| <img src="web/public/exchange-icons/bitget.svg" width="20" height="20" style="vertical-align: middle;"/> **Bitget**         |   ✅   | [Register](https://www.bitget.com/referral/register?from=referral&clacCode=c8a43172) |
-| <img src="web/public/exchange-icons/kucoin.svg" width="20" height="20" style="vertical-align: middle;"/> **KuCoin**         |   ✅   | [Register](https://www.kucoin.com/r/broker/CXEV7XKK)                                |
-| <img src="web/public/exchange-icons/gate.svg" width="20" height="20" style="vertical-align: middle;"/> **Gate**             |   ✅   | [Register](https://www.gatenode.xyz/share/VQBGUAxY)                                 |
-| <img src="web/public/exchange-icons/aster.svg" width="20" height="20" style="vertical-align: middle;"/> **Aster**           |   ✅   | [Register](https://www.asterdex.com/en/referral/fdfc0e)                             |
-| <img src="web/public/exchange-icons/lighter.png" width="20" height="20" style="vertical-align: middle;"/> **Lighter**       |   ✅   | [Register](https://app.lighter.xyz/?referral=68151432)                              |
+### Instructions
 
-<br/>
+1. Clone the repository:
 
-## Demo
+   ```
+   git clone https://github.com/dunksmaster/hydra-trader.git
+   cd hydra-trader
+   ```
 
-https://github.com/user-attachments/assets/3310f495-14c5-4586-a1cc-3d32e44aa505
+2. Copy `.env.example` to `.env` and fill in your own values. At minimum you'll need `JWT_SECRET`, `DATA_ENCRYPTION_KEY`, and `RSA_PRIVATE_KEY` (all generated locally, not shared secrets), plus your own exchange and AI-model API keys entered through the app itself once it's running — none of this project's own keys are in the repository or the `.env.example` file.
 
-<br/>
+3. Run the backend:
 
-## The model proposes. The runtime disposes.
+   ```
+   go run .
+   ```
 
-Decisions come from a language model reading the [Claw402.ai](https://claw402.ai) · Vergex data stack: a live signal board that ranks every market with directional bias and signal strength, per-symbol Signal Lab deep signals, cost-basis and liquidation heatmaps that show where the crowd's fuel and walls sit, and real-time market net flow — cross-checked against raw candles and the trader's own live track record. Execution does not.
+4. In a separate terminal, run the frontend:
 
-Every order passes through limits enforced in code, outside the model's reach:
+   ```
+   cd web
+   npm install
+   npm run dev
+   ```
 
-|                          |                                                                                    |
-| :----------------------- | :--------------------------------------------------------------------------------- |
-| Position limits          | Max concurrent positions, notional capped as a ratio of equity, one position per symbol |
-| Leverage clamps          | Hard caps applied at order-sizing time, independent of what the model requests     |
-| Exchange-side protection | Stop-loss and take-profit placed on the exchange immediately after every entry     |
-| Drawdown auto-close      | Profitable positions that give back too much from their peak are closed            |
-| Trade throttling         | Minimum hold times, per-symbol re-entry cooldowns, per-cycle and per-hour entry limits |
-| Safe mode                | Repeated model failures block new entries until the model recovers                 |
-| Launch preflight         | Model access, wallet funds, strategy, and exchange balances verified before a trader may start |
+   Or build and run both with Docker using `docker/Dockerfile.backend` and `docker/Dockerfile.frontend`.
 
-Each decision is stored with the model's full reasoning. There is no position without a paper trail.
+## Features
 
-<br/>
-
-## Terminal
-
-| | |
-| :--- | :--- |
-| **Autopilot** | Guided launch: fund, connect, deposit, start — with server-side preflight throughout |
-| **Strategy Studio** | Style presets, coin universes, indicators, leverage, entry confidence, custom prompts |
-| **Competition** | Public leaderboard ranked by realized return, each entry attributed to its model |
-| **Dashboard** | Live positions, orders, statistics, and the reasoning behind every decision |
-
-<details>
-<summary>Screenshots</summary>
-
-<br/>
-
-|                        Overview                         |                          Market Chart                           |
-| :-----------------------------------------------------: | :-------------------------------------------------------------: |
-| <img src="screenshots/dashboard-page.png" width="400"/> | <img src="screenshots/dashboard-market-chart.png" width="400"/> |
-
-|                          Trading Stats                           |                          Position History                           |
-| :--------------------------------------------------------------: | :-----------------------------------------------------------------: |
-| <img src="screenshots/dashboard-trading-stats.png" width="400"/> | <img src="screenshots/dashboard-position-history.png" width="400"/> |
-
-|                     Strategy Editor                      |                      Indicators Config                       |
-| :------------------------------------------------------: | :----------------------------------------------------------: |
-| <img src="screenshots/strategy-studio.png" width="400"/> | <img src="screenshots/strategy-indicators.png" width="400"/> |
-
-|                     Competition                           |                    Configuration                              |
-| :-------------------------------------------------------: | :-----------------------------------------------------------: |
-| <img src="screenshots/competition-page.png" width="400"/> | <img src="screenshots/config-ai-exchanges.png" width="400"/>  |
-
-</details>
-
-<br/>
-
-## Models
-
-Eight providers with your own keys — DeepSeek, OpenAI, Claude, Qwen, Gemini, Grok, Kimi, MiniMax — including custom endpoints and model names.
-
-Or no keys at all: [Claw402](https://claw402.ai) meters model usage per call in USDC over the x402 protocol. A wallet on Base replaces every API key.
-
-| Provider | Access |
-| :------- | :----- |
-| **Claw402** | [Pay-as-you-go AI models with official discount](https://claw402.ai) |
-
-## Markets
-
-Crypto perpetuals on all nine exchanges. On Hyperliquid, the same runtime also trades tokenized US equities, commodities, indices, FX, and pre-IPO perps — TSLA, NVDA, GOLD, SPX, EUR, OPENAI — alongside crypto.
-
-<br/>
+- AI-decision trading on Bitget UTA v3, with a pluggable model backend (NVIDIA/Nemotron, OpenAI-compatible providers, and others)
+- Multi-leader Hyperliquid copy-trading: mirror any number of leader wallets into one follower account independently
+- Two-tier position caps (per-leader and wallet-wide) so multiple copy heads sharing one wallet can never collectively exceed its real capacity
+- `tid`-based fill deduplication so a redelivered WebSocket message is never mirrored twice
+- An overflow queue for skipped opens (cap hit, already holding the side) instead of a silent drop
+- Loss-streak auto-pause for a leader that starts losing repeatedly
+- Code-enforced hard take-profit and hard stop-loss, independent of the AI model's own decisions
+- Telegram system alerts (wallet empty, AI quota exhausted, rate-limited, Safe Mode toggled, copy paused/evicted) — upstream had none of this
+- An interactive Telegram control surface: close a position, view leaders and their layer/pause state, switch copy-strategy profiles, and pull per-trader/per-venue performance reports, all from chat
+- A copy-trading bots dashboard in the web UI, showing every head's leader, layer, live account state, and shared wallet capacity in one view
+- Encrypted-at-rest credentials (exchange API keys, Telegram bot token) using AES-GCM, with a fail-closed decryption path
 
 ## Architecture
 
-```
-    ┌─────────────────────────────────────────────────┐
-    │                 Trading Terminal                 │
-    │        React · TypeScript · TradingView          │
-    │   Dashboard · Strategy Studio · Competition      │
-    ├─────────────────────────────────────────────────┤
-    │                  API Server (Go)                  │
-    │      JWT auth · encrypted credential store        │
-    ├──────────────┬──────────────┬───────────────────┤
-    │   Strategy    │  Autopilot   │   Trader Runtime  │
-    │    Engine     │  Preflight   │    Risk Engine    │
-    ├──────────────┴──────────────┴───────────────────┤
-    │                 AI Model Layer                    │
-    │  DeepSeek · OpenAI · Claude · Qwen · Gemini      │
-    │  Grok · Kimi · MiniMax · Claw402 (x402 USDC)     │
-    ├─────────────────────────────────────────────────┤
-    │              Exchange Connectivity                │
-    │ Binance · Bybit · OKX · Hyperliquid · Bitget     │
-    │ KuCoin · Gate · Aster · Lighter                  │
-    └─────────────────────────────────────────────────┘
-```
+This fork runs two distinct trading modes side by side, on the same account infrastructure but with independent logic.
 
-<br/>
+### AI-decision trading
 
-## Install
+A single trader is given an AI model, an exchange connection (Bitget UTA v3 in this fork's primary deployment), and a strategy — a coin source, risk controls, and prompt configuration. Each cycle, the engine gathers market data and current positions, sends them to the model, parses a decision, and executes it. A code-enforced hard take-profit/stop-loss runs independently of the model, so a bad or slow model response can't leave a position unmanaged.
 
-**Linux / macOS**
+### Copy trading
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
-```
+Each copy-trading "head" is a separate trader instance pointed at one Hyperliquid leader wallet address. It subscribes to that wallet's live fills, sizes a mirrored order proportionally to the follower's equity relative to the leader's, and applies its own position caps before ever placing an order. Multiple heads can share one Hyperliquid wallet; a wallet-wide cap is checked before any individual head's own cap, so the shared resource is always protected first.
 
-**Railway**
+## How It Works
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/nofx?referralCode=nofx)
+### Leader-fill mirroring and deduplication
 
-**Docker**
+`CopyLeaderWatcher` subscribes to a leader wallet's fills over Hyperliquid's WebSocket. Each fill carries a `tid` (trade ID); a ring-buffer of seen `tid`s means a redelivered message is dropped before it ever reaches the mirroring logic, so a WebSocket reconnect or a duplicate push can't cause a double-open.
 
-```bash
-curl -O https://raw.githubusercontent.com/NoFxAiOS/nofx/main/docker-compose.prod.yml
-docker compose -f docker-compose.prod.yml up -d
-```
+```mermaid
+flowchart TD
+    L1[Leader Wallet 1] -->|WebSocket fills| W1[CopyLeaderWatcher]
+    L2[Leader Wallet 2] -->|WebSocket fills| W2[CopyLeaderWatcher]
+    LN[Leader Wallet N] -->|WebSocket fills| WN[CopyLeaderWatcher]
 
-**Windows** — install [Docker Desktop](https://www.docker.com/products/docker-desktop/), then:
+    W1 --> DD1{tid seen<br/>before?}
+    W2 --> DD2{tid seen<br/>before?}
+    WN --> DDN{tid seen<br/>before?}
 
-```powershell
-curl -o docker-compose.prod.yml https://raw.githubusercontent.com/NoFxAiOS/nofx/main/docker-compose.prod.yml
-docker compose -f docker-compose.prod.yml up -d
-```
+    DD1 -->|yes: drop| X1[discarded]
+    DD2 -->|yes: drop| X2[discarded]
+    DDN -->|yes: drop| XN[discarded]
 
-**From source** — Go 1.21+, Node.js 18+:
+    DD1 -->|no| HF[handleLeaderFill]
+    DD2 -->|no| HF
+    DDN -->|no| HF
 
-```bash
-git clone https://github.com/NoFxAiOS/nofx.git && cd nofx
-go build -o nofx && ./nofx            # backend
-cd web && npm install && npm run dev  # frontend, in a second terminal
-```
+    HF --> SB{"Copy paused /<br/>layer &gt;= 3?"}
+    SB -->|yes| SkipA[skip: paused]
 
-**Update** — re-run the install script; it upgrades in place.
+    SB -->|no| PH{Follower already<br/>holds this side?}
+    PH -->|yes| Overflow[enqueueOverflowOpen<br/>skip: already_open]
 
-<details>
-<summary>Server deployment</summary>
+    PH -->|no| SZ[ComputeCopyNotionalUSD<br/>size relative to follower equity]
+    SZ -->|sizing rejected| Overflow
 
-<br/>
+    SZ -->|ok| WS{"Wallet slots full?<br/>(wallet_copy_slots)"}
+    WS -->|yes: shared cap hit| SkipB["skip: wallet slots full<br/>(blocks ALL heads equally)"]
 
-**HTTP**
+    WS -->|no| PC{"Per-leader max_positions<br/>reached?"}
+    PC -->|yes| SkipC[skip: max positions]
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
-# http://YOUR_IP:3000
+    PC -->|no| EXEC[Place real order<br/>on Hyperliquid]
+    EXEC --> TG[Telegram alert<br/>on skip/paused/dropped]
+
+    style WS fill:#E0483B,color:#fff
+    style DD1 fill:#1A1813,color:#fff
+    style DD2 fill:#1A1813,color:#fff
+    style DDN fill:#1A1813,color:#fff
 ```
 
-**HTTPS via Cloudflare**
+### Two-tier position caps
 
-1. Add the domain to [Cloudflare](https://dash.cloudflare.com) (free plan)
-2. A record → server IP, proxied
-3. SSL/TLS → Flexible
-4. `TRANSPORT_ENCRYPTION=true` in `.env`
+Every copy head has its own `max_positions` cap, but every wallet also has a `wallet_copy_slots` cap. The wallet cap is checked first — so if five heads share one wallet with a slot cap of 3, the fourth and fifth heads' opens are skipped regardless of what their own individual caps allow. The shared resource is protected before any single head's preferences are.
 
-</details>
+### Overflow queue
 
-<br/>
+An open that's skipped — a cap hit, or the follower already holding that side — isn't silently dropped. It's logged with a specific skip category and queued via the overflow mechanism, persisted so it survives a restart, and can be handed to another trader with free capacity instead of being lost.
 
-## Documentation
+### Telegram alerting
 
-|                                                         |                                       |
-| :------------------------------------------------------ | :------------------------------------ |
-| [Getting Started](docs/getting-started/README.md)       | Deployment and exchange API guides    |
-| [Architecture](docs/architecture/README.md)             | System design and module index        |
-| [Strategy Module](docs/architecture/STRATEGY_MODULE.md) | Coin selection, AI prompts, execution |
-| [FAQ](docs/guides/faq.en.md)                            | Common questions                      |
-| [Troubleshooting](docs/guides/TROUBLESHOOTING.md)       | Diagnosing common issues              |
+Failure conditions that upstream only ever logged to the server now raise a real alert to the bound Telegram chat:
 
-## Community
+```mermaid
+flowchart LR
+    subgraph "Failure conditions detected in the trading loop"
+        A1[AI wallet empty]
+        A2[AI quota exhausted]
+        A3[AI rate-limited]
+        A4[Safe Mode activated]
+        A5[Safe Mode deactivated]
+    end
+    A1 & A2 & A3 & A4 & A5 --> EV[events.SystemAlertEvent]
+    EV --> TN[Telegram notifier]
+    TN --> USER[User's Telegram chat]
+```
 
-[Telegram](https://t.me/nofx_dev_community) · [Twitter/X](https://x.com/vergex_ai) · [Issues](https://github.com/NoFxAiOS/nofx/issues) · [vergex.trade](https://vergex.trade) · [Live dashboard](https://vergex.trade/explore)
+Copy-specific events (a leader paused, evicted, or hitting a loss streak) raise the same kind of alert. Beyond alerts, the Telegram bot also gives real control: closing a position, switching a copy-strategy profile, or checking a leader's current state, all from chat.
 
-## Contributing
+### Hard exits
 
-Code, documentation, translations, and bug reports are all welcome — see the [Contributing Guide](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), and [Security Policy](SECURITY.md).
+Independent of what the AI model decides, a strategy can set a hard take-profit and hard stop-loss margin percentage. Every cycle, any open position that has crossed either threshold is force-closed by the code, not the model — this is what kept a slow or wrong model response from leaving a position unmanaged.
 
-NOFX tracks meaningful contributions and intends to reward contributors as the ecosystem grows. Priority issues carry higher weight.
+## Known Limitations
 
-| Contribution      | Weight |
-| :---------------- | :----: |
-| Pinned Issue PRs  | ★★★★★★ |
-| Code (Merged PRs) | ★★★★★  |
-| Bug Fixes         |  ★★★★  |
-| Feature Ideas     |  ★★★   |
-| Bug Reports       |   ★★   |
-| Documentation     |   ★★   |
+Stated honestly, not glossed over:
 
-<a href="https://github.com/NoFxAiOS/nofx/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=NoFxAiOS/nofx" alt="Contributors"/>
-</a>
+- **All order execution uses IOC (Immediate-Or-Cancel) exclusively.** Every open, close, stop-loss, and take-profit pays taker fees. No maker-fee (GTC) path exists for copy-trading or AI-decision opens.
+- **`GetPositions()` staleness is unconfirmed** as a possible cause of rapid same-symbol re-opens on high-frequency leaders — raised during live operation, never fully resolved.
+- **No backtesting existed while this was live.** Every strategy and risk-setting change was validated by watching it trade with real money, not before deployment.
+- **One trader, "Crypto BigG," suffered a real -99.6% equity loss** during live operation, with no conclusive causal trail found in the application's own logs. This is stated here as an honest engineering lesson: the system did not have a circuit breaker that would have prevented an account from being drawn down this far.
 
-## Sponsors
+## Status
 
-<a href="https://github.com/pjl914335852-ux"><img src="https://github.com/pjl914335852-ux.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/cat9999aaa"><img src="https://github.com/cat9999aaa.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/1733055465"><img src="https://github.com/1733055465.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/kolal2020"><img src="https://github.com/kolal2020.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/CyberFFarm"><img src="https://github.com/CyberFFarm.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/vip3001003"><img src="https://github.com/vip3001003.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/mrtluh"><img src="https://github.com/mrtluh.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/cpcp1117-source"><img src="https://github.com/cpcp1117-source.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/match-007"><img src="https://github.com/match-007.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/leiwuhen1715"><img src="https://github.com/leiwuhen1715.png" width="50" height="50" style="border-radius:50%"/></a>
-<a href="https://github.com/SHAOXIA1991"><img src="https://github.com/SHAOXIA1991.png" width="50" height="50" style="border-radius:50%"/></a>
+This project traded real capital on Bitget and Hyperliquid from mid-August through early September 2026. It was deliberately wound down on 2026-09-03: all cloud infrastructure was deleted, and every exchange API key the project used was revoked. This was a decision to stop risking live capital, not a response to any single incident.
 
-[Become a sponsor](https://github.com/sponsors/NoFxAiOS)
+Ongoing work, if any, is local-only paper-trading and backtesting against historical leader-fill data — running the same copy-trading logic against a simulated balance, with no exchange risk. There is no live deployment of this code and none is currently planned.
 
-<br/>
+## License and Credits
 
-If NOFX is useful to you, a star helps other traders find it.
+This project is licensed under **AGPL-3.0**, inherited unchanged from upstream — see [`LICENSE`](LICENSE). The AGPL's network-service clause means that running a modified version of this code as a live service to users obligates making that modified source available to those users; upstream (NoFxAiOS) has actively enforced this against at least one other project (see `docs/legal/AGPL-VIOLATION-REPORT-ChainOpera-EN.md` in this repository).
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.com/#NoFxAiOS/nofx&Date)
-
-## License
-
-[AGPL-3.0](LICENSE)
-
-<sub>Automated trading involves substantial risk. AI-driven strategies are experimental and can lose money. Size positions appropriately, understand each venue, and never trade funds you cannot afford to lose. Full [disclaimer](DISCLAIMER.md).</sub>
+This project is built directly on top of [NoFxAiOS/nofx](https://github.com/NoFxAiOS/nofx) — all of the AI-decision trading core, the exchange integration framework, and the web dashboard's foundation come from that project. This fork's own contribution is the Hyperliquid copy-trading engine, the Telegram alerting and control surface, Bitget UTA v3 support, and the operational fixes documented in this repository's commit history.
