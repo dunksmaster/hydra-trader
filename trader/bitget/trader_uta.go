@@ -448,15 +448,71 @@ func (t *BitgetTrader) utaCancelAllOrders(symbol string) error {
 }
 
 func (t *BitgetTrader) utaSetStopLoss(symbol, positionSide string, quantity, stopPrice float64) error {
-	return t.utaPlaceTPSL(symbol, positionSide, quantity, stopPrice, true)
+	return t.utaPlaceCombinedTPSL(symbol, positionSide, quantity, stopPrice, 0)
 }
 
 func (t *BitgetTrader) utaSetTakeProfit(symbol, positionSide string, quantity, takeProfitPrice float64) error {
-	return t.utaPlaceTPSL(symbol, positionSide, quantity, takeProfitPrice, false)
+	return t.utaPlaceCombinedTPSL(symbol, positionSide, quantity, 0, takeProfitPrice)
+}
+
+// SetTPSL places stop-loss and take-profit in one UTA strategy order.
+// Bitget UTA rejects SL-only payloads with "Parameter takeProfit cannot be empty".
+func (t *BitgetTrader) SetTPSL(symbol, positionSide string, quantity, stopLoss, takeProfit float64) error {
+	symbol = t.convertSymbol(symbol)
+	if t.useUTA() {
+		return t.utaPlaceCombinedTPSL(symbol, positionSide, quantity, stopLoss, takeProfit)
+	}
+	if err := t.SetStopLoss(symbol, positionSide, quantity, stopLoss); err != nil {
+		return err
+	}
+	if takeProfit > 0 {
+		return t.SetTakeProfit(symbol, positionSide, quantity, takeProfit)
+	}
+	return nil
 }
 
 func (t *BitgetTrader) utaPlaceTPSL(symbol, positionSide string, quantity, trigger float64, isStopLoss bool) error {
-	priceStr := t.FormatPrice(symbol, trigger)
+	if isStopLoss {
+		return t.utaPlaceCombinedTPSL(symbol, positionSide, quantity, trigger, 0)
+	}
+	return t.utaPlaceCombinedTPSL(symbol, positionSide, quantity, 0, trigger)
+}
+
+func (t *BitgetTrader) utaPlaceCombinedTPSL(symbol, positionSide string, quantity, stopLoss, takeProfit float64) error {
+	if stopLoss <= 0 && takeProfit <= 0 {
+		return fmt.Errorf("Bitget UTA TPSL requires a stop or take-profit price")
+	}
+	// UTA place-strategy-order (type=tpsl) requires BOTH fields. If only one
+	// side was asked for, synthesize a wide counterpart so Bitget accepts it.
+	if stopLoss <= 0 {
+		if strings.EqualFold(positionSide, "SHORT") {
+			stopLoss = takeProfit * 1.20
+		} else {
+			stopLoss = takeProfit * 0.80
+		}
+	}
+	if takeProfit <= 0 {
+		if strings.EqualFold(positionSide, "SHORT") {
+			takeProfit = stopLoss * 0.80
+		} else {
+			takeProfit = stopLoss * 1.20
+		}
+	}
+	slStr := t.FormatPrice(symbol, stopLoss)
+	tpStr := t.FormatPrice(symbol, takeProfit)
+	qtyStr := ""
+	if quantity > 0 {
+		qtyStr, _ = t.FormatQuantity(symbol, quantity)
+	}
+	body := utaTPSLBody(symbol, positionSide, slStr, tpStr, qtyStr, genBitgetClientOid())
+	if _, err := t.doRequest("POST", utaPlaceStrategyPath, body); err != nil {
+		return fmt.Errorf("failed to set stop loss: %w", err)
+	}
+	logger.Infof("  ✓ [Bitget UTA] SL/TP set: %s sl=%s tp=%s", symbol, slStr, tpStr)
+	return nil
+}
+
+func utaTPSLBody(symbol, positionSide, stopLoss, takeProfit, qty, clientOid string) map[string]interface{} {
 	body := map[string]interface{}{
 		"category":    utaFuturesCategory,
 		"symbol":      symbol,
@@ -466,32 +522,20 @@ func (t *BitgetTrader) utaPlaceTPSL(symbol, positionSide string, quantity, trigg
 		"slTriggerBy": "mark",
 		"tpOrderType": "market",
 		"slOrderType": "market",
-		"clientOid":   genBitgetClientOid(),
+		"clientOid":   clientOid,
+		"stopLoss":    stopLoss,
+		"takeProfit":  takeProfit,
 	}
 	if strings.EqualFold(positionSide, "SHORT") {
 		body["posSide"] = "short"
 	} else if strings.EqualFold(positionSide, "LONG") {
 		body["posSide"] = "long"
 	}
-	if quantity > 0 {
-		qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	if qty != "" {
 		body["tpslMode"] = "partial"
-		body["qty"] = qtyStr
+		body["qty"] = qty
 	}
-	if isStopLoss {
-		body["stopLoss"] = priceStr
-	} else {
-		body["takeProfit"] = priceStr
-	}
-	if _, err := t.doRequest("POST", utaPlaceStrategyPath, body); err != nil {
-		return fmt.Errorf("failed to set %s: %w", map[bool]string{true: "stop loss", false: "take profit"}[isStopLoss], err)
-	}
-	kind := "Take profit"
-	if isStopLoss {
-		kind = "Stop loss"
-	}
-	logger.Infof("  ✓ [Bitget UTA] %s set: %s @ %s", kind, symbol, priceStr)
-	return nil
+	return body
 }
 
 func (t *BitgetTrader) utaCancelPlanOrders(symbol, want string) error {
@@ -678,15 +722,15 @@ func (t *BitgetTrader) utaGetTrades(startTime time.Time, limit int) ([]BitgetTra
 
 	trades := make([]BitgetTrade, 0, len(fills))
 	for _, fill := range fills {
-		orderAction, ok := utaOrderAction(fill.Side, fill.TradeSide, fill.HoldSide)
-		if !ok {
-			logger.Warnf("⚠️ Bitget UTA: skipping ambiguous fill %s (side=%q tradeSide=%q holdSide=%q)",
-				firstNonEmpty(fill.ExecId, fill.OrderId), fill.Side, fill.TradeSide, fill.HoldSide)
-			continue
-		}
 		fillPrice, _ := strconv.ParseFloat(fill.ExecPrice, 64)
 		fillQty, _ := strconv.ParseFloat(fill.ExecQty, 64)
 		profit, _ := strconv.ParseFloat(fill.ExecPnl, 64)
+		orderAction, ok := utaOrderAction(fill.Side, fill.TradeSide, fill.HoldSide, fill.PosSide, profit)
+		if !ok {
+			logger.Warnf("⚠️ Bitget UTA: skipping ambiguous fill %s (side=%q tradeSide=%q holdSide=%q posSide=%q)",
+				firstNonEmpty(fill.ExecId, fill.OrderId), fill.Side, fill.TradeSide, fill.HoldSide, fill.PosSide)
+			continue
+		}
 		cTime, _ := strconv.ParseInt(fill.CreatedTime, 10, 64)
 		var fee float64
 		var feeAsset string
@@ -720,6 +764,7 @@ type utaFill struct {
 	Side        string `json:"side"`
 	TradeSide   string `json:"tradeSide"`
 	HoldSide    string `json:"holdSide"`
+	PosSide     string `json:"posSide"`
 	ExecPrice   string `json:"execPrice"`
 	ExecQty     string `json:"execQty"`
 	ExecPnl     string `json:"execPnl"`
@@ -768,10 +813,10 @@ func unmarshalUTAList(data []byte, dest interface{}) error {
 	return json.Unmarshal(data, dest)
 }
 
-func utaOrderAction(side, tradeSide, holdSide string) (string, bool) {
+func utaOrderAction(side, tradeSide, holdSide, posSide string, execPnl float64) (string, bool) {
 	side = strings.ToLower(side)
 	tradeSide = strings.ToLower(tradeSide)
-	holdSide = strings.ToLower(holdSide)
+	positionSide := strings.ToLower(firstNonEmpty(holdSide, posSide))
 	switch tradeSide {
 	case "open":
 		if side == "buy" {
@@ -788,19 +833,44 @@ func utaOrderAction(side, tradeSide, holdSide string) (string, bool) {
 			return "close_long", true
 		}
 	case "buy_single", "sell_single", "":
-		// Legacy one-way fills do not encode open/close in tradeSide. Use the
-		// exchange-reported position direction when present; never guess from
-		// buy/sell alone because buy can close a short and sell can open one.
+		// Hedge fills include holdSide/posSide. One-way UTA fills often omit both;
+		// disambiguate open vs close with execPnl (realized on closes).
 		switch {
-		case side == "buy" && holdSide == "long":
+		case side == "buy" && positionSide == "long":
 			return "open_long", true
-		case side == "buy" && holdSide == "short":
+		case side == "buy" && positionSide == "short":
 			return "close_short", true
-		case side == "sell" && holdSide == "short":
+		case side == "sell" && positionSide == "short":
 			return "open_short", true
-		case side == "sell" && holdSide == "long":
+		case side == "sell" && positionSide == "long":
 			return "close_long", true
 		}
+		return utaOneWayOrderAction(side, tradeSide, execPnl)
+	}
+	return "", false
+}
+
+// utaOneWayOrderAction maps Bitget one-way fills when holdSide/posSide are absent.
+// Opens carry zero execPnl; closes carry realized PnL from the exchange.
+func utaOneWayOrderAction(side, tradeSide string, execPnl float64) (string, bool) {
+	side = strings.ToLower(side)
+	tradeSide = strings.ToLower(tradeSide)
+	if side == "" {
+		return "", false
+	}
+	if execPnl != 0 {
+		if side == "buy" {
+			return "close_short", true
+		}
+		if side == "sell" {
+			return "close_long", true
+		}
+	}
+	if side == "buy" || tradeSide == "buy_single" {
+		return "open_long", true
+	}
+	if side == "sell" || tradeSide == "sell_single" {
+		return "open_short", true
 	}
 	return "", false
 }

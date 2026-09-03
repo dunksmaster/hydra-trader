@@ -59,6 +59,11 @@ type BitgetTrader struct {
 	contractsCacheTime  time.Time
 	contractsCacheMutex sync.RWMutex
 
+	tradableSymbols     map[string]bool
+	tradableCatalogTime time.Time
+	tradableCatalogMutex sync.RWMutex
+	contractCatalog     *contractCatalog
+
 	// Cache duration
 	cacheDuration time.Duration
 

@@ -209,9 +209,11 @@ func (t *BitgetTrader) SyncOrdersFromBitget(traderID string, exchangeID string, 
 		// Normalize symbol
 		symbol := market.Normalize(trade.Symbol)
 
+		orderAction := reconcileBitgetOrderAction(traderID, positionStore, symbol, trade.Side, trade.OrderAction)
+
 		// Determine position side from order action
 		positionSide := "LONG"
-		if strings.Contains(trade.OrderAction, "short") {
+		if strings.Contains(orderAction, "short") {
 			positionSide = "SHORT"
 		}
 
@@ -229,7 +231,7 @@ func (t *BitgetTrader) SyncOrdersFromBitget(traderID string, exchangeID string, 
 			Side:            side,
 			PositionSide:    "BOTH", // Bitget uses one-way position mode
 			Type:            trade.OrderType,
-			OrderAction:     trade.OrderAction,
+			OrderAction:     orderAction,
 			Quantity:        trade.FillQty,
 			Price:           trade.FillPrice,
 			Status:          "FILLED",
@@ -274,22 +276,46 @@ func (t *BitgetTrader) SyncOrdersFromBitget(traderID string, exchangeID string, 
 		// Create/update position record using PositionBuilder
 		if err := posBuilder.ProcessTrade(
 			traderID, exchangeID, exchangeType,
-			symbol, positionSide, trade.OrderAction,
+			symbol, positionSide, orderAction,
 			trade.FillQty, trade.FillPrice, trade.Fee, trade.ProfitLoss,
 			execTimeMs, trade.TradeID,
 		); err != nil {
 			logger.Infof("  ⚠️ Failed to sync position for trade %s: %v", trade.TradeID, err)
 		} else {
-			logger.Infof("  📍 Position updated for trade: %s (action: %s, qty: %.6f)", trade.TradeID, trade.OrderAction, trade.FillQty)
+			logger.Infof("  📍 Position updated for trade: %s (action: %s, qty: %.6f)", trade.TradeID, orderAction, trade.FillQty)
 		}
 
 		syncedCount++
 		logger.Infof("  ✅ Synced trade: %s %s %s qty=%.6f price=%.6f pnl=%.2f fee=%.6f action=%s",
-			trade.TradeID, symbol, side, trade.FillQty, trade.FillPrice, trade.ProfitLoss, trade.Fee, trade.OrderAction)
+			trade.TradeID, symbol, side, trade.FillQty, trade.FillPrice, trade.ProfitLoss, trade.Fee, orderAction)
 	}
 
 	logger.Infof("✅ Bitget order sync completed: %d new trades synced", syncedCount)
 	return nil
+}
+
+// reconcileBitgetOrderAction fixes UTA fills that omit execPnl/tradeSide on closes
+// (sell with open long was mislabeled open_short → wrong Telegram alert).
+func reconcileBitgetOrderAction(traderID string, positionStore openPositionLookup, symbol, side, orderAction string) string {
+	if positionStore == nil || !strings.HasPrefix(orderAction, "open_") {
+		return orderAction
+	}
+	side = strings.ToLower(strings.TrimSpace(side))
+	switch side {
+	case "sell":
+		if open, err := positionStore.GetOpenPositionBySymbol(traderID, symbol, "LONG"); err == nil && open != nil {
+			return "close_long"
+		}
+	case "buy":
+		if open, err := positionStore.GetOpenPositionBySymbol(traderID, symbol, "SHORT"); err == nil && open != nil {
+			return "close_short"
+		}
+	}
+	return orderAction
+}
+
+type openPositionLookup interface {
+	GetOpenPositionBySymbol(traderID, symbol, side string) (*store.TraderPosition, error)
 }
 
 // StartOrderSync starts background order sync task for Bitget

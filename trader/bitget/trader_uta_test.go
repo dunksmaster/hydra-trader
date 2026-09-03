@@ -22,26 +22,31 @@ func TestIsBitgetClassicBlocked(t *testing.T) {
 
 func TestUTAOrderAction(t *testing.T) {
 	tests := []struct {
-		name, side, tradeSide, holdSide, want string
-		wantOK                                bool
+		name, side, tradeSide, holdSide, posSide, want string
+		execPnl                                       float64
+		wantOK                                        bool
 	}{
-		{"open long", "buy", "open", "", "open_long", true},
-		{"open short", "sell", "open", "", "open_short", true},
-		{"close long", "sell", "close", "", "close_long", true},
-		{"close short", "buy", "close", "", "close_short", true},
-		{"legacy open long", "buy", "buy_single", "long", "open_long", true},
-		{"legacy close short", "buy", "buy_single", "short", "close_short", true},
-		{"legacy open short", "sell", "sell_single", "short", "open_short", true},
-		{"legacy close long", "sell", "sell_single", "long", "close_long", true},
-		{"ambiguous buy", "buy", "buy_single", "", "", false},
-		{"ambiguous sell", "sell", "", "", "", false},
+		{"open long", "buy", "open", "", "", "open_long", 0, true},
+		{"open short", "sell", "open", "", "", "open_short", 0, true},
+		{"close long", "sell", "close", "", "", "close_long", 0, true},
+		{"close short", "buy", "close", "", "", "close_short", 0, true},
+		{"legacy open long", "buy", "buy_single", "long", "", "open_long", 0, true},
+		{"legacy close short", "buy", "buy_single", "short", "", "close_short", 0, true},
+		{"legacy open short", "sell", "sell_single", "short", "", "open_short", 0, true},
+		{"legacy close long", "sell", "sell_single", "long", "", "close_long", 0, true},
+		{"posSide open long", "buy", "buy_single", "", "long", "open_long", 0, true},
+		{"one-way open long", "buy", "buy_single", "", "", "open_long", 0, true},
+		{"one-way open short", "sell", "sell_single", "", "", "open_short", 0, true},
+		{"one-way close long", "sell", "sell_single", "", "", "close_long", -1.5, true},
+		{"one-way close short", "buy", "buy_single", "", "", "close_short", 2.3, true},
+		{"empty side", "", "buy_single", "", "", "", 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := utaOrderAction(tt.side, tt.tradeSide, tt.holdSide)
+			got, ok := utaOrderAction(tt.side, tt.tradeSide, tt.holdSide, tt.posSide, tt.execPnl)
 			if got != tt.want || ok != tt.wantOK {
-				t.Fatalf("utaOrderAction(%q, %q, %q) = (%q, %v), want (%q, %v)",
-					tt.side, tt.tradeSide, tt.holdSide, got, ok, tt.want, tt.wantOK)
+				t.Fatalf("utaOrderAction(%q, %q, %q, %q, %v) = (%q, %v), want (%q, %v)",
+					tt.side, tt.tradeSide, tt.holdSide, tt.posSide, tt.execPnl, got, ok, tt.want, tt.wantOK)
 			}
 		})
 	}
@@ -55,6 +60,19 @@ func TestParseUTAFillsWrappedList(t *testing.T) {
 	}
 	if len(fills) != 1 || fills[0].ExecId != "9" || fills[0].HoldSide != "long" || fills[0].FeeDetail[0].Fee != "0.02" {
 		t.Fatalf("fills=%+v", fills)
+	}
+}
+
+func TestUTATPSLBodySendsBothPrices(t *testing.T) {
+	body := utaTPSLBody("HYPEUSDT", "LONG", "58.08", "64.67", "1.67", "oid")
+	if body["stopLoss"] != "58.08" || body["takeProfit"] != "64.67" {
+		t.Fatalf("UTA TPSL must send both prices, got %v", body)
+	}
+	if body["type"] != "tpsl" || body["posSide"] != "long" {
+		t.Fatalf("body=%v", body)
+	}
+	if body["tpslMode"] != "partial" || body["qty"] != "1.67" {
+		t.Fatalf("partial qty missing: %v", body)
 	}
 }
 
