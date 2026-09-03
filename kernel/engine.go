@@ -114,6 +114,9 @@ type Context struct {
 	BTCETHLeverage     int                                `json:"-"`
 	AltcoinLeverage    int                                `json:"-"`
 	Timeframes         []string                           `json:"-"`
+	// MarketDataExchange selects which exchange CoinAnk uses for OHLCV (e.g.
+	// "bitget" for Bitget traders). Empty defaults to binance in fetchMarketData.
+	MarketDataExchange string                             `json:"-"`
 }
 
 // Decision AI trading decision
@@ -215,7 +218,7 @@ func NewStrategyEngine(config *store.StrategyConfig, claw402WalletKey ...string)
 	// Create NofxOS client with API key from config
 	apiKey := config.Indicators.NofxOSAPIKey
 	if apiKey == "" {
-		apiKey = nofxos.DefaultAuthKey
+		apiKey = nofxos.DefaultClient().GetAuthKey()
 	}
 	client := nofxos.NewClient(nofxos.DefaultBaseURL, apiKey)
 
@@ -429,18 +432,21 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		return e.filterExcludedCoins(coins), nil
 
 	case "vergex_signal":
-		coins, err := e.getVergexSignalCoins(
-			coinSource.VergexLimit,
-			coinSource.VergexMarketType,
-			coinSource.VergexChain,
-			coinSource.VergexLiqBand,
-			coinSource.HyperRankCategory,
-			coinSource.StaticCoins,
-		)
-		if err != nil {
-			return nil, err
+		// Claw402/Vergex board lookups are paid calls and are disabled. Fall
+		// back to the pinned crypto list so the trader can still decide.
+		logger.Infof("Skipping Claw402/Vergex board; using static crypto candidates")
+		coins := coinSource.StaticCoins
+		if len(coins) == 0 {
+			coins = store.DefaultCryptoCoins
 		}
-		return e.filterExcludedCoins(coins), nil
+		for _, symbol := range coins {
+			symbol = market.Normalize(symbol)
+			candidates = append(candidates, CandidateCoin{
+				Symbol:  symbol,
+				Sources: []string{"static"},
+			})
+		}
+		return e.filterExcludedCoins(candidates), nil
 
 	case "mixed":
 		if coinSource.UseAI500 {
@@ -664,13 +670,32 @@ func clampHyperRankLimit(limit int) int {
 	if limit <= 0 {
 		return 5
 	}
-	if limit > 10 {
-		return 10
+	if limit > store.MaxCandidateCoins {
+		return store.MaxCandidateCoins
+	}
+	return limit
+}
+
+func clampHyperRankFetchLimit(limit int) int {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 200 {
+		return 200
 	}
 	return limit
 }
 
 func (e *StrategyEngine) getHyperRankCoins(category, direction string, limit int) ([]CandidateCoin, error) {
+	return e.getHyperRankCoinsWithFetch(category, direction, clampHyperRankLimit(limit))
+}
+
+// GetHyperRankCandidateCoins returns a deep HL ranking slice for exchange-side filtering (e.g. Bitget baseCoin match).
+func (e *StrategyEngine) GetHyperRankCandidateCoins(category, direction string, fetchLimit int) ([]CandidateCoin, error) {
+	return e.getHyperRankCoinsWithFetch(category, direction, clampHyperRankFetchLimit(fetchLimit))
+}
+
+func (e *StrategyEngine) getHyperRankCoinsWithFetch(category, direction string, fetchLimit int) ([]CandidateCoin, error) {
 	category = strings.ToLower(strings.TrimSpace(category))
 	if category == "" {
 		category = "stock"
@@ -679,7 +704,7 @@ func (e *StrategyEngine) getHyperRankCoins(category, direction string, limit int
 	if direction == "" {
 		direction = "gainers"
 	}
-	limit = clampHyperRankLimit(limit)
+	fetchLimit = clampHyperRankFetchLimit(fetchLimit)
 
 	ctx := context.Background()
 	var ranked []struct {
@@ -732,15 +757,15 @@ func (e *StrategyEngine) getHyperRankCoins(category, direction string, limit int
 		}
 	})
 
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
+	if len(ranked) > fetchLimit {
+		ranked = ranked[:fetchLimit]
 	}
 	candidates := make([]CandidateCoin, 0, len(ranked))
 	source := fmt.Sprintf("hyper_rank_%s_%s", category, direction)
 	for _, item := range ranked {
 		candidates = append(candidates, CandidateCoin{Symbol: item.symbol, Sources: []string{source}})
 	}
-	logger.Infof("✅ Loaded %d Hyperliquid rank coins (%s/%s, capped at %d)", len(candidates), category, direction, limit)
+	logger.Infof("✅ Loaded %d Hyperliquid rank coins (%s/%s, fetch cap %d)", len(candidates), category, direction, fetchLimit)
 	return candidates, nil
 }
 

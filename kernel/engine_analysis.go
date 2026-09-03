@@ -27,6 +27,11 @@ var (
 	// XML tag extraction (supports any characters in reasoning chain)
 	reReasoningTag = regexp.MustCompile(`(?s)<reasoning>(.*?)</reasoning>`)
 	reDecisionTag  = regexp.MustCompile(`(?s)<decision>(.*?)</decision>`)
+
+	// Nemotron often drafts JSON with an ellipsis placeholder: {"action":"wait", ...}
+	reJSONEllipsisComma = regexp.MustCompile(`,\s*(?:\.{3}|…)`)
+	reJSONEllipsisBare  = regexp.MustCompile(`(?:\.{3}|…)\s*`)
+	reJSONTrailingComma = regexp.MustCompile(`,\s*([}\]])`)
 )
 
 // ============================================================================
@@ -87,19 +92,28 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	pruneCandidateCoinsWithoutMarketData(ctx)
 	enrichVergexDataWithStrategy(ctx, engine)
 
-	// Ensure OITopDataMap is initialized
+	// Optional OI-top enrichment. This used to run on every cycle and would
+	// block Bitget/hyper_rank traders on a paid NofxOS/claw402 call (5m timeout)
+	// before NVIDIA ever ran.
 	if ctx.OITopDataMap == nil {
 		ctx.OITopDataMap = make(map[string]*OITopData)
-		oiPositions, err := engine.nofxosClient.GetOITopPositions()
-		if err == nil {
-			for _, pos := range oiPositions {
-				ctx.OITopDataMap[pos.Symbol] = &OITopData{
-					Rank:              pos.Rank,
-					OIDeltaPercent:    pos.OIDeltaPercent,
-					OIDeltaValue:      pos.OIDeltaValue,
-					PriceDeltaPercent: pos.PriceDeltaPercent,
+		if shouldFetchLegacyOITop(engine) && engine.nofxosClient != nil {
+			logger.Infof("📊 Fetching legacy NofxOS OI-top enrichment")
+			oiPositions, err := engine.nofxosClient.GetOITopPositions()
+			if err == nil {
+				for _, pos := range oiPositions {
+					ctx.OITopDataMap[pos.Symbol] = &OITopData{
+						Rank:              pos.Rank,
+						OIDeltaPercent:    pos.OIDeltaPercent,
+						OIDeltaValue:      pos.OIDeltaValue,
+						PriceDeltaPercent: pos.PriceDeltaPercent,
+					}
 				}
+			} else {
+				logger.Warnf("⚠️  Failed to fetch NofxOS OI-top enrichment: %v", err)
 			}
+		} else {
+			logger.Infof("⏭️  Skipping legacy NofxOS OI-top enrichment (hyper_rank or OI ranking off)")
 		}
 	}
 
@@ -200,9 +214,18 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 
 	logger.Infof("📊 Strategy timeframes: %v, Primary: %s, Kline count: %d", timeframes, primaryTimeframe, klineCount)
 
+	klineExchange := market.NormalizeKlineExchange("")
+	if ctx.MarketDataExchange != "" {
+		klineExchange = market.NormalizeKlineExchange(ctx.MarketDataExchange)
+	}
+	strictKlines := strings.EqualFold(klineExchange, "bitget")
+	if strictKlines {
+		logger.Infof("📊 Using %s klines for AI market data (match execution venue)", klineExchange)
+	}
+
 	// 1. First fetch data for position coins (must fetch)
 	for _, pos := range ctx.Positions {
-		data, err := market.GetWithTimeframes(pos.Symbol, timeframes, primaryTimeframe, klineCount)
+		data, err := market.GetWithTimeframesForExchange(pos.Symbol, timeframes, primaryTimeframe, klineCount, klineExchange, strictKlines)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for position %s: %v", pos.Symbol, err)
 			continue
@@ -223,7 +246,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 			continue
 		}
 
-		data, err := market.GetWithTimeframes(coin.Symbol, timeframes, primaryTimeframe, klineCount)
+		data, err := market.GetWithTimeframesForExchange(coin.Symbol, timeframes, primaryTimeframe, klineCount, klineExchange, strictKlines)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for %s: %v", coin.Symbol, err)
 			continue
@@ -232,14 +255,11 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		// Liquidity filter (skip for xyz dex assets - they don't have OI data from Binance)
 		isExistingPosition := positionSymbols[coin.Symbol]
 		isXyzAsset := market.IsXyzDexAsset(coin.Symbol)
-		if !isExistingPosition && !isXyzAsset && data.OpenInterest != nil && data.CurrentPrice > 0 {
-			oiValue := data.OpenInterest.Latest * data.CurrentPrice
-			oiValueInMillions := oiValue / 1_000_000
-			if oiValueInMillions < minOIThresholdMillions {
-				logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin",
-					coin.Symbol, oiValueInMillions, minOIThresholdMillions)
-				continue
-			}
+		if !isExistingPosition && !isXyzAsset && shouldSkipLowOpenInterest(data, minOIThresholdMillions) {
+			oiValueInMillions := data.OpenInterest.Latest * data.CurrentPrice / 1_000_000
+			logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin",
+				coin.Symbol, oiValueInMillions, minOIThresholdMillions)
+			continue
 		}
 
 		ctx.MarketDataMap[coin.Symbol] = data
@@ -247,6 +267,31 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 
 	logger.Infof("📊 Successfully fetched multi-timeframe market data for %d coins", len(ctx.MarketDataMap))
 	return nil
+}
+
+// shouldFetchLegacyOITop is the old always-on NofxOS OI-top prompt enrichment.
+// Skip it for Hyperliquid-native boards (hyper_rank / vergex) and whenever the
+// strategy did not ask for OI ranking — those calls go through claw402 and can
+// stall the whole decision cycle for minutes.
+func shouldFetchLegacyOITop(engine *StrategyEngine) bool {
+	if engine == nil || engine.config == nil {
+		return false
+	}
+	if engine.usesHyperliquidNativeUniverse() {
+		return false
+	}
+	source := engine.config.CoinSource
+	return engine.config.Indicators.EnableOIRanking || source.UseOITop || source.SourceType == "oi_top"
+}
+
+// shouldSkipLowOpenInterest applies the liquidity floor only when Binance
+// returned a real OI reading. Latest==0 is the fetch-failure fallback and
+// must not empty the candidate list.
+func shouldSkipLowOpenInterest(data *market.Data, minMillions float64) bool {
+	if data == nil || data.OpenInterest == nil || data.OpenInterest.Latest <= 0 || data.CurrentPrice <= 0 {
+		return false
+	}
+	return data.OpenInterest.Latest*data.CurrentPrice/1_000_000 < minMillions
 }
 
 func pruneCandidateCoinsWithoutMarketData(ctx *Context) {
@@ -317,62 +362,102 @@ func extractDecisions(response string) ([]Decision, error) {
 	s = strings.TrimSpace(s)
 	s = fixMissingQuotes(s)
 
-	var jsonPart string
-	if match := reDecisionTag.FindStringSubmatch(s); match != nil && len(match) > 1 {
-		jsonPart = strings.TrimSpace(match[1])
-		logger.Infof("✓ Extracted JSON using <decision> tag")
-	} else {
-		jsonPart = s
-		logger.Infof("⚠️  <decision> tag not found, searching JSON in full text")
+	jsonPart := lastDecisionJSONPart(s)
+	jsonPart = fixMissingQuotes(jsonPart)
+	jsonPart = sanitizeDecisionJSON(jsonPart)
+
+	if isEmptyDecisionArray(jsonPart) {
+		logger.Infof("⚠️  [SafeFallback] <decision> was empty []; treating as wait")
+		return []Decision{waitDecision("Model output an empty decision list")}, nil
 	}
 
-	jsonPart = fixMissingQuotes(jsonPart)
-
 	if m := reJSONFence.FindStringSubmatch(jsonPart); m != nil && len(m) > 1 {
-		jsonContent := strings.TrimSpace(m[1])
-		jsonContent = compactArrayOpen(jsonContent)
-		jsonContent = fixMissingQuotes(jsonContent)
-		if err := validateJSONFormat(jsonContent); err != nil {
-			return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
+		jsonContent := prepareDecisionJSON(m[1])
+		decisions, err := unmarshalDecisions(jsonContent)
+		if err != nil {
+			logger.Warnf("⚠️  [SafeFallback] fenced JSON parse failed (%v); waiting this cycle", err)
+			return []Decision{waitDecision(err.Error())}, nil
 		}
-		var decisions []Decision
-		if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-			return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
-		}
-		return decisions, nil
+		return normalizeWaitDecisions(decisions), nil
 	}
 
 	jsonContent := strings.TrimSpace(reJSONArray.FindString(jsonPart))
 	if jsonContent == "" {
 		logger.Infof("⚠️  [SafeFallback] AI didn't output JSON decision, entering safe wait mode")
-
 		cotSummary := jsonPart
 		if len(cotSummary) > 240 {
 			cotSummary = cotSummary[:240] + "..."
 		}
-
-		fallbackDecision := Decision{
-			Symbol:    "ALL",
-			Action:    "wait",
-			Reasoning: fmt.Sprintf("Model didn't output structured JSON decision, entering safe wait; summary: %s", cotSummary),
-		}
-
-		return []Decision{fallbackDecision}, nil
+		return []Decision{waitDecision("Model didn't output structured JSON decision, entering safe wait; summary: " + cotSummary)}, nil
 	}
 
-	jsonContent = compactArrayOpen(jsonContent)
-	jsonContent = fixMissingQuotes(jsonContent)
+	jsonContent = prepareDecisionJSON(jsonContent)
+	decisions, err := unmarshalDecisions(jsonContent)
+	if err != nil {
+		logger.Warnf("⚠️  [SafeFallback] JSON parse failed (%v); waiting this cycle. content=%s", err, jsonContent)
+		return []Decision{waitDecision("JSON parse failed, safe wait: " + err.Error())}, nil
+	}
+	return normalizeWaitDecisions(decisions), nil
+}
 
+func lastDecisionJSONPart(s string) string {
+	matches := reDecisionTag.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		logger.Infof("⚠️  <decision> tag not found, searching JSON in full text")
+		return s
+	}
+	logger.Infof("✓ Extracted JSON using last of %d <decision> tag(s)", len(matches))
+	return strings.TrimSpace(matches[len(matches)-1][1])
+}
+
+func prepareDecisionJSON(s string) string {
+	s = compactArrayOpen(strings.TrimSpace(s))
+	s = fixMissingQuotes(s)
+	return sanitizeDecisionJSON(s)
+}
+
+func sanitizeDecisionJSON(s string) string {
+	s = reJSONEllipsisComma.ReplaceAllString(s, "")
+	s = reJSONEllipsisBare.ReplaceAllString(s, "")
+	s = reJSONTrailingComma.ReplaceAllString(s, "$1")
+	return strings.TrimSpace(s)
+}
+
+func isEmptyDecisionArray(s string) bool {
+	return strings.TrimSpace(s) == "[]"
+}
+
+func waitDecision(reason string) Decision {
+	return Decision{Symbol: "ALL", Action: "wait", Reasoning: reason}
+}
+
+func unmarshalDecisions(jsonContent string) ([]Decision, error) {
+	if isEmptyDecisionArray(jsonContent) {
+		return []Decision{waitDecision("Model output an empty decision list")}, nil
+	}
 	if err := validateJSONFormat(jsonContent); err != nil {
-		return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
+		return nil, err
 	}
-
 	var decisions []Decision
 	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-		return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
+		return nil, err
 	}
-
 	return decisions, nil
+}
+
+func normalizeWaitDecisions(decisions []Decision) []Decision {
+	for i := range decisions {
+		if strings.EqualFold(decisions[i].Action, "wait") && strings.TrimSpace(decisions[i].Symbol) == "" {
+			decisions[i].Symbol = "ALL"
+		}
+		if strings.EqualFold(decisions[i].Symbol, "wait") {
+			decisions[i].Symbol = "ALL"
+			if decisions[i].Action == "" {
+				decisions[i].Action = "wait"
+			}
+		}
+	}
+	return decisions
 }
 
 func fixMissingQuotes(jsonStr string) string {

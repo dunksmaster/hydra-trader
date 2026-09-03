@@ -181,17 +181,10 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 }
 
 func (e *StrategyEngine) usesVergexSignalPrompt() bool {
-	if e == nil || e.config == nil {
-		return false
-	}
-	coinSource := e.config.CoinSource
-	sourceType := strings.ToLower(strings.TrimSpace(coinSource.SourceType))
-	return sourceType == "vergex_signal" ||
-		sourceType == "claw402" ||
-		sourceType == "claw402_vergex" ||
-		coinSource.VergexMarketType != "" ||
-		coinSource.VergexChain != "" ||
-		coinSource.VergexLimit > 0
+	// Claw402/Vergex is no longer a live decision path. Traders use the
+	// standard system prompt even if an old strategy still has leftover Vergex
+	// fields in its saved JSON.
+	return false
 }
 
 func (e *StrategyEngine) buildVergexSystemPrompt(accountEquity float64, variant string, lang Language, zh bool, singleSymbol bool, primarySymbol string) string {

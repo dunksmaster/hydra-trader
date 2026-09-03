@@ -7,50 +7,34 @@ import (
 	"nofx/store"
 )
 
-func TestBuildSystemPromptUsesVergexClaw402Prompt(t *testing.T) {
+func TestBuildSystemPromptNeverUsesVergexClaw402Prompt(t *testing.T) {
 	cfg := store.GetDefaultStrategyConfig("zh")
 	cfg.CoinSource.SourceType = "vergex_signal"
 	cfg.CoinSource.VergexLimit = 5
 	cfg.PromptSections.RoleDefinition = "# You are a professional Hyperliquid USDC multi-asset trading AI"
-	cfg.CustomPrompt = "Long only, no shorts."
 
 	engine := NewStrategyEngine(&cfg)
 	prompt := engine.BuildSystemPrompt(30, "balanced")
 
-	if !strings.Contains(prompt, "NOFX Claw402 auto-trader") {
-		t.Fatalf("prompt did not use the Claw402/Vergex TradeFi role:\n%s", prompt)
+	claw402Phrases := []string{
+		"NOFX Claw402 auto-trader",
+		"Claw402.ai Signal Ranking",
+		"Signal Lab",
+		"Cost/Liquidation Heatmap",
 	}
-	if !strings.Contains(prompt, "Claw402.ai Signal Ranking") || !strings.Contains(prompt, "Signal Lab") || !strings.Contains(prompt, "Cost/Liquidation Heatmap") {
-		t.Fatalf("prompt is missing Claw402/Vergex detail data guidance:\n%s", prompt)
+	for _, phrase := range claw402Phrases {
+		if strings.Contains(prompt, phrase) {
+			t.Fatalf("prompt still contains paid Claw402/Vergex phrase %q:\n%s", phrase, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "You are a professional Hyperliquid USDC multi-asset trading AI") {
+		t.Fatalf("prompt should fall back to the standard trading role:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "open_short") {
 		t.Fatalf("prompt should explicitly allow short entries:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "Direction must be data-driven") {
-		t.Fatalf("prompt should explain that direction is data-driven, not long-only:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "every open position must use exactly 10x") {
-		t.Fatalf("prompt should force 10x leverage for Claw402 opens:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "use the full max notional per position") {
-		t.Fatalf("prompt should force full-size Claw402 opens:\n%s", prompt)
-	}
 	if containsCJK(prompt) {
 		t.Fatalf("system prompt must be English-only, got CJK text:\n%s", prompt)
-	}
-	legacyPhrases := []string{
-		"Hyperliquid USDC multi-asset trading AI",
-		"Long only",
-		"Altcoin",
-		"BTC/ETH",
-		"LONG-ONLY",
-		"Do not short",
-		"MUST open a long",
-	}
-	for _, phrase := range legacyPhrases {
-		if strings.Contains(prompt, phrase) {
-			t.Fatalf("prompt still contains legacy phrase %q:\n%s", phrase, prompt)
-		}
 	}
 }
 
