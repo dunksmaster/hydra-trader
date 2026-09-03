@@ -11,16 +11,23 @@ import (
 	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
+var evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+
 // validateStrategyConfig validates strategy configuration and returns warnings
 func validateStrategyConfig(config *store.StrategyConfig) []string {
 	var warnings []string
-	if config.StrategyType == "grid_trading" {
+	if config.StrategyType == "grid_trading" || config.StrategyType == "copy_trading" {
+		if config.StrategyType == "copy_trading" {
+			warnings = append(warnings, validateCopyStrategyConfig(config)...)
+		}
 		return warnings
 	}
 
@@ -32,6 +39,37 @@ func validateStrategyConfig(config *store.StrategyConfig) []string {
 	}
 
 	return warnings
+}
+
+func validateCopyStrategyConfig(config *store.StrategyConfig) []string {
+	var warnings []string
+	if config == nil || config.CopyConfig == nil {
+		warnings = append(warnings, "Copy trading requires copy_config with a leader_address.")
+		return warnings
+	}
+	cfg := config.CopyConfig
+	cfg.Normalize()
+	if !evmAddressPattern.MatchString(cfg.LeaderAddress) {
+		warnings = append(warnings, "Copy leader_address must be a valid 0x-prefixed EVM wallet (42 characters).")
+	}
+	if cfg.SizeMode == "fixed_notional" && cfg.NotionalUSD < cfg.MinNotionalUSD {
+		warnings = append(warnings, fmt.Sprintf("Copy notional_usd (%.2f) is below min_notional_usd (%.2f).", cfg.NotionalUSD, cfg.MinNotionalUSD))
+	}
+	if cfg.MaxLeverage < 1 {
+		warnings = append(warnings, "Copy max_leverage must be at least 1.")
+	}
+	return warnings
+}
+
+func strategyTypeFromConfig(strategy *store.Strategy) string {
+	if strategy == nil {
+		return ""
+	}
+	var config store.StrategyConfig
+	if err := json.Unmarshal([]byte(strategy.Config), &config); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(config.StrategyType)
 }
 
 func attachPublishConfig(config *store.StrategyConfig, strategy *store.Strategy) {

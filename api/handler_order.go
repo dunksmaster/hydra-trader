@@ -7,6 +7,7 @@ import (
 
 	"nofx/logger"
 	"nofx/market"
+	"nofx/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,17 +42,29 @@ func (s *Server) handleTraderList(c *gin.Context) {
 
 		// Return complete AIModelID (e.g. "admin_deepseek"), don't truncate
 		// Frontend needs complete ID to verify model exists (consistent with handleGetTraderConfig)
+		var exchangeType string
+		if trader.ExchangeID != "" {
+			if ex, err := s.store.Exchange().GetByID(userID, trader.ExchangeID); err == nil && ex != nil {
+				exchangeType = ex.ExchangeType
+			} else if ex, err := s.store.Exchange().GetByIDAny(trader.ExchangeID); err == nil && ex != nil {
+				exchangeType = ex.ExchangeType
+			}
+		}
+
 		result = append(result, map[string]interface{}{
 			"trader_id":           trader.ID,
 			"trader_name":         trader.Name,
 			"ai_model":            trader.AIModelID, // Use complete ID
 			"exchange_id":         trader.ExchangeID,
+			"exchange":            exchangeType,
 			"is_running":          isRunning,
 			"show_in_competition": trader.ShowInCompetition,
 			"initial_balance":     trader.InitialBalance,
 			"strategy_id":         trader.StrategyID,
 			"strategy_name":       strategyName,
 		})
+		row := result[len(result)-1]
+		enrichTraderListRow(s, userID, trader.ID, trader.StrategyID, row)
 	}
 
 	c.JSON(http.StatusOK, result)
@@ -181,68 +194,33 @@ func (s *Server) handlePositions(c *gin.Context) {
 
 // handlePositionHistory Historical closed positions with statistics
 func (s *Server) handlePositionHistory(c *gin.Context) {
+	userID := c.GetString("user_id")
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
 		SafeBadRequest(c, "Invalid trader ID")
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
-		SafeNotFound(c, "Trader")
-		return
-	}
-
-	// Get optional query parameters
 	limitStr := c.DefaultQuery("limit", "100")
 	limit := 100
 	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
 		limit = l
 	}
 
-	// Get store
-	store := trader.GetStore()
-	if store == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Store not available"})
+	traderIDs, traderIDPatterns, initialBalance, store, ok := s.positionHistoryScope(userID, traderID)
+	if !ok {
+		SafeNotFound(c, "Trader")
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if fullCfg, cfgErr := s.store.Trader().GetFullConfig(userID, traderID); cfgErr == nil && fullCfg.Exchange != nil {
-		if syncErr := s.syncOrdersFromExchange(
-			trader.GetUnderlyingTrader(),
-			trader.GetID(),
-			fullCfg.Exchange.ID,
-			fullCfg.Exchange.ExchangeType,
-		); syncErr != nil {
-			logger.Infof("⚠️ Position history refresh sync skipped: %v", syncErr)
-		}
-	}
-
-	traderIDs := []string{trader.GetID()}
-	var traderIDPatterns []string
-	if strings.EqualFold(strings.TrimSpace(trader.GetName()), "NOFX Autopilot") && strings.TrimSpace(userID) != "" {
-		// Older one-click launches created new Autopilot trader rows. When a row was
-		// deleted, its closed position records remained under the old generated ID.
-		// The generated Autopilot ID embeds userID + "claw402", so this safely
-		// restores same-user history continuity without joining deleted rows.
-		traderIDPatterns = append(traderIDPatterns, "%_"+userID+"_claw402_%")
-	}
-
-	// Get closed positions
 	positions, err := store.Position().GetClosedPositionsByTraderFilters(traderIDs, traderIDPatterns, limit)
 	if err != nil {
 		SafeInternalError(c, "Get position history", err)
 		return
 	}
 
-	// Get statistics
-	stats, _ := store.Position().GetFullStatsByTraderFilters(traderIDs, traderIDPatterns, trader.GetInitialBalance())
-
-	// Get symbol stats
+	stats, _ := store.Position().GetFullStatsByTraderFilters(traderIDs, traderIDPatterns, initialBalance)
 	symbolStats, _ := store.Position().GetSymbolStatsByTraderFilters(traderIDs, traderIDPatterns, 10)
-
-	// Get direction stats
 	directionStats, _ := store.Position().GetDirectionStatsByTraderFilters(traderIDs, traderIDPatterns)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -251,6 +229,45 @@ func (s *Server) handlePositionHistory(c *gin.Context) {
 		"symbol_stats":    symbolStats,
 		"direction_stats": directionStats,
 	})
+}
+
+// positionHistoryScope resolves trader ID filters and optionally syncs exchange
+// orders when the trader process is loaded. Falls back to store-only reads so
+// Telegram /history works for stopped bots (same as /api/orders).
+func (s *Server) positionHistoryScope(userID, traderID string) (traderIDs, traderIDPatterns []string, initialBalance float64, st *store.Store, ok bool) {
+	traderIDs = []string{traderID}
+	st = s.store
+
+	if at, err := s.traderManager.GetTrader(traderID); err == nil {
+		if st = at.GetStore(); st == nil {
+			st = s.store
+		}
+		initialBalance = at.GetInitialBalance()
+		if fullCfg, cfgErr := s.store.Trader().GetFullConfig(userID, traderID); cfgErr == nil && fullCfg.Exchange != nil {
+			if syncErr := s.syncOrdersFromExchange(
+				at.GetUnderlyingTrader(),
+				at.GetID(),
+				fullCfg.Exchange.ID,
+				fullCfg.Exchange.ExchangeType,
+			); syncErr != nil {
+				logger.Infof("⚠️ Position history refresh sync skipped: %v", syncErr)
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(at.GetName()), "NOFX Autopilot") && strings.TrimSpace(userID) != "" {
+			traderIDPatterns = append(traderIDPatterns, "%_"+userID+"_claw402_%")
+		}
+		return traderIDs, traderIDPatterns, initialBalance, st, true
+	}
+
+	fullCfg, err := s.store.Trader().GetFullConfig(userID, traderID)
+	if err != nil {
+		return nil, nil, 0, nil, false
+	}
+	initialBalance = fullCfg.Trader.InitialBalance
+	if strings.EqualFold(strings.TrimSpace(fullCfg.Trader.Name), "NOFX Autopilot") && strings.TrimSpace(userID) != "" {
+		traderIDPatterns = append(traderIDPatterns, "%_"+userID+"_claw402_%")
+	}
+	return traderIDs, traderIDPatterns, initialBalance, st, true
 }
 
 // handleTrades Historical trades list
@@ -316,12 +333,6 @@ func (s *Server) handleOrders(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
-		SafeNotFound(c, "Trader")
-		return
-	}
-
 	// Get optional query parameters
 	symbol := c.Query("symbol")
 	statusFilter := c.Query("status") // NEW, FILLED, CANCELED, etc.
@@ -336,15 +347,9 @@ func (s *Server) handleOrders(c *gin.Context) {
 		symbol = market.Normalize(symbol)
 	}
 
-	// Get orders from store
-	store := trader.GetStore()
-	if store == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Store not available"})
-		return
-	}
-
-	// Get orders with filters applied at database level
-	orders, err := store.Order().GetTraderOrdersFiltered(trader.GetID(), symbol, statusFilter, limit)
+	// Read from the app store directly so Telegram /orders works even when the
+	// trader process is not loaded in memory (stopped bots still have DB history).
+	orders, err := s.store.Order().GetTraderOrdersFiltered(traderID, symbol, statusFilter, limit)
 	if err != nil {
 		SafeInternalError(c, "Get orders", err)
 		return

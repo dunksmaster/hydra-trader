@@ -145,9 +145,6 @@ func (s *Server) setupRoutes() {
 		// System config (no authentication required, for frontend to determine admin mode/registration status)
 		s.route(api, "GET", "/config", "Get system configuration", s.handleGetSystemConfig)
 
-		// Wallet validation (no authentication required — used by frontend config form)
-		api.POST("/wallet/validate", s.handleWalletValidate)
-		api.POST("/wallet/generate", s.handleWalletGenerate)
 		s.route(api, "GET", "/hyperliquid/connect-config", "Get NOFX Hyperliquid builder authorization config", s.handleHyperliquidConnectConfig)
 		s.route(api, "GET", "/hyperliquid/account", "Get Hyperliquid account balance summary", s.handleHyperliquidAccount)
 		s.route(api, "GET", "/hyperliquid/agent", "Get Hyperliquid approved agent wallets and authorization expiry", s.handleHyperliquidAgent)
@@ -211,6 +208,10 @@ func (s *Server) setupRoutes() {
 			// Server IP query (requires authentication, for whitelist configuration)
 			s.route(protected, "GET", "/server-ip", "Get server public IP (for exchange whitelist)", s.handleGetServerIP)
 
+			// Wallet helpers (authenticated — accept or return private keys)
+			s.route(protected, "POST", "/wallet/validate", "Validate claw402 wallet private key", s.handleWalletValidate)
+			s.route(protected, "POST", "/wallet/generate", "Generate a new claw402 wallet keypair", s.handleWalletGenerate)
+
 			s.route(protected, "GET", "/vergex/signal-ranking", "Vergex signal ranking via claw402 (?marketType=all&limit=30)", s.handleVergexSignalRanking)
 			s.route(protected, "GET", "/vergex/signal-lab", "Vergex signal lab via claw402 (?marketType=hip3_perp&symbol=AAPL)", s.handleVergexSignalLab)
 			s.route(protected, "GET", "/vergex/cost-liquidation-heatmap", "Vergex cost/liquidation heatmap via claw402 (?marketType=hip3_perp&symbol=AAPL)", s.handleVergexCostLiquidationHeatmap)
@@ -218,9 +219,12 @@ func (s *Server) setupRoutes() {
 
 			// AI trader management
 			s.routeWithSchema(protected, "GET", "/my-traders", "List user's traders with status",
-				`Returns: [{"trader_id":"<EXACT id — use this as trader_id in all ?trader_id= queries and POST /traders/:id/start|stop>","trader_name":"<string>","is_running":<bool>}]
+				`Returns: [{"trader_id":"<EXACT id — use this as trader_id in all ?trader_id= queries and POST /traders/:id/start|stop>","trader_name":"<string>","is_running":<bool>,"strategy_type":"<ai_trading|copy_trading|grid_trading>","copy_layer":<int>,"copy_paused":<bool>}]
 NOTE: The id field is "trader_id" (NOT "id"). Always read trader_id from this endpoint before querying data.`,
 				s.handleTraderList)
+			s.routeWithSchema(protected, "GET", "/copy-bots", "Aggregated copy-trading bots dashboard data",
+				`Returns profile, shared wallet summary, and per-bot leader/config/account/positions/stats.`,
+				s.handleCopyBots)
 			s.routeWithSchema(protected, "GET", "/traders/:id/config", "Get full trader configuration",
 				`:id = trader_id from GET /api/my-traders`,
 				s.handleGetTraderConfig)
@@ -367,7 +371,7 @@ StrategyConfig fields:
   indicators.rsi_periods: [7,14] default
   indicators.atr_periods: [14] default
   indicators.boll_periods: [20] default
-  indicators.nofxos_api_key: ALWAYS "cm_568c67eae410d912c54c"
+  indicators.nofxos_api_key: set via NOFXOS_API_KEY env var on the server (never hardcode in strategy JSON)
   indicators.enable_quant_data: ALWAYS true
   indicators.enable_quant_oi: ALWAYS true
   indicators.enable_quant_netflow: ALWAYS true
@@ -623,7 +627,7 @@ func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, str
 	traderID := c.Query("trader_id")
 
 	// Ensure user's traders are loaded into memory.
-	if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
+	if err := s.traderManager.LoadUserTradersFromStore(s.store, userID, false); err != nil {
 		logger.Infof("⚠️ Failed to load traders for user %s: %v", userID, err)
 	}
 
