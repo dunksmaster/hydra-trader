@@ -2,9 +2,12 @@ package trader
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"nofx/events"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
@@ -104,30 +107,32 @@ func (at *AutoTrader) runCycle() error {
 	at.saveEquitySnapshot(ctx)
 	at.protectNakedPositions(ctx)
 
-	// Profit locks are exchange safety actions, not AI advice. Execute them
-	// before the model call so quota/provider failures cannot strand a winner
-	// above the configured threshold. End the cycle afterward because ctx still
-	// describes the pre-close account and must not be reused for new orders.
-	if hardTPDecisions := at.injectHardTakeProfits(nil, ctx); len(hardTPDecisions) > 0 {
-		for _, d := range hardTPDecisions {
+	// Profit locks and loss cuts are exchange safety actions, not AI advice.
+	// Execute them before the model call so quota/provider failures cannot
+	// strand a position past its threshold, and so they bypass the hold gates
+	// that would otherwise hold a loser open as noise. End the cycle afterward
+	// because ctx still describes the pre-close account and must not be reused
+	// for new orders.
+	if hardExits := at.injectHardExits(nil, ctx); len(hardExits) > 0 {
+		for _, d := range hardExits {
 			actionRecord := store.DecisionAction{
 				Action: d.Action, Symbol: d.Symbol, Confidence: d.Confidence,
 				Reasoning: d.Reasoning, Timestamp: time.Now().UTC(),
 			}
 			if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
-				at.logErrorf("❌ Hard take-profit failed (%s %s): %v", d.Symbol, d.Action, err)
+				at.logErrorf("❌ Hard exit failed (%s %s): %v", d.Symbol, d.Action, err)
 				actionRecord.Error = err.Error()
 				record.Success = false
-				record.ErrorMessage = fmt.Sprintf("Hard take-profit failed for %s: %v", d.Symbol, err)
-				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ hard TP %s %s failed: %v", d.Symbol, d.Action, err))
+				record.ErrorMessage = fmt.Sprintf("Hard exit failed for %s: %v", d.Symbol, err)
+				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ hard exit %s %s failed: %v", d.Symbol, d.Action, err))
 			} else {
 				actionRecord.Success = true
-				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ hard TP %s %s succeeded", d.Symbol, d.Action))
+				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ hard exit %s %s succeeded: %s", d.Symbol, d.Action, d.Reasoning))
 			}
 			record.Decisions = append(record.Decisions, actionRecord)
 		}
 		if err := at.saveDecision(record); err != nil {
-			at.logWarnf("⚠ Failed to save hard take-profit decision record: %v", err)
+			at.logWarnf("⚠ Failed to save hard exit decision record: %v", err)
 		}
 		return nil
 	}
@@ -196,30 +201,33 @@ func (at *AutoTrader) runCycle() error {
 				"AI fee wallet out of funds: balance $%.2f USDC, next call needs ~$%.2f. Top up the Base USDC wallet.",
 				insufficientFunds.Balance, insufficientFunds.Needed,
 			)
+			at.emitSystemAlert(events.AlertWalletEmpty, record.ErrorMessage)
+		} else {
+			lower := strings.ToLower(err.Error())
+			if strings.Contains(lower, "quota") || strings.Contains(lower, "resource_exhausted") {
+				at.emitSystemAlert(events.AlertQuotaExhausted, record.ErrorMessage)
+			} else if strings.Contains(lower, "rate limit") || strings.Contains(lower, "too many tokens") || strings.Contains(lower, "429") {
+				at.emitSystemAlert(events.AlertRateLimited, record.ErrorMessage)
+			}
 		}
 
 		// Activate safe mode after 3 consecutive failures
 		if at.consecutiveAIFailures >= 3 && !at.isSafeMode() {
-			at.setSafeMode(true, fmt.Sprintf("AI failed %d consecutive times: %v", at.consecutiveAIFailures, err))
+			reason := fmt.Sprintf("AI failed %d consecutive times: %v", at.consecutiveAIFailures, err)
+			at.setSafeMode(true, reason)
 			at.logErrorf("🛡️ SAFE MODE ACTIVATED — AI failed %d times in a row. No new positions will be opened. Existing positions are protected with current stop-loss settings.", at.consecutiveAIFailures)
 			at.logErrorf("🛡️ Reason: %v", err)
 			at.logErrorf("🛡️ Action: Will keep trying AI each cycle. Safe mode auto-deactivates when AI recovers.")
+			at.emitSystemAlert(events.AlertSafeMode, "Safe mode activated. No new positions will be opened. Existing positions stay protected. "+reason)
 		}
 
-		// Print system prompt and AI chain of thought (output even with errors for debugging)
+		// Log prompt metadata only — full prompts contain equity, positions, and strategy text.
 		if aiDecision != nil {
-			logger.Info("\n" + strings.Repeat("=", 70) + "\n")
-			logger.Infof("📋 System prompt (error case)")
-			logger.Info(strings.Repeat("=", 70))
-			logger.Info(aiDecision.SystemPrompt)
-			logger.Info(strings.Repeat("=", 70))
-
+			logger.Infof("📋 System prompt (error case): len=%d sha256=%s",
+				len(aiDecision.SystemPrompt), hashPreview(aiDecision.SystemPrompt))
 			if aiDecision.CoTTrace != "" {
-				logger.Info("\n" + strings.Repeat("-", 70) + "\n")
-				logger.Info("💭 AI chain of thought analysis (error case):")
-				logger.Info(strings.Repeat("-", 70))
-				logger.Info(aiDecision.CoTTrace)
-				logger.Info(strings.Repeat("-", 70))
+				logger.Infof("💭 AI chain of thought (error case): len=%d sha256=%s",
+					len(aiDecision.CoTTrace), hashPreview(aiDecision.CoTTrace))
 			}
 		}
 
@@ -244,6 +252,7 @@ func (at *AutoTrader) runCycle() error {
 	if at.isSafeMode() {
 		at.logInfof("🛡️ SAFE MODE DEACTIVATED — AI is working again. Resuming normal trading.")
 		at.setSafeMode(false, "")
+		at.emitSystemAlert(events.AlertSafeModeOff, "Safe mode deactivated. AI recovered; normal trading resumed.")
 	}
 
 	// // 5. Print system prompt
@@ -374,6 +383,32 @@ func (at *AutoTrader) runCycle() error {
 
 func normalizeUniverseSymbol(symbol string) string {
 	return market.Normalize(strings.TrimSpace(symbol))
+}
+
+// resolveLiveSymbol maps AI shorthand ("BTC", "SOL") onto the live exchange
+// ticker ("BTCUSDT"). NVIDIA often drops the quote; Hyperliquid then reports
+// "no long position found for BTC" and take-profit never fires.
+func (at *AutoTrader) resolveLiveSymbol(symbol string) string {
+	n := market.Normalize(strings.TrimSpace(symbol))
+	if at == nil || at.trader == nil || n == "" {
+		return n
+	}
+	want := universeBaseKey(n)
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return n
+	}
+	for _, pos := range positions {
+		live, _ := pos["symbol"].(string)
+		if live == "" {
+			continue
+		}
+		liveN := market.Normalize(live)
+		if universeBaseKey(liveN) == want {
+			return liveN
+		}
+	}
+	return n
 }
 
 // universeBaseKey returns the bare base ticker used for fuzzy candidate
@@ -613,13 +648,41 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	if at.strategyEngine == nil {
 		at.logWarnf("⚠️ No strategy engine configured, skipping candidate coins")
 	} else {
-		coins, err := at.strategyEngine.GetCandidateCoins()
+		strategyConfig := at.strategyEngine.GetConfig()
+		var coins []kernel.CandidateCoin
+		var err error
+
+		if at.exchange == "bitget" && strategyConfig != nil && strategyConfig.CoinSource.SourceType == "hyper_rank" {
+			// Fetch a deep HL board first, then Bitget filters by baseCoin/symbol before AI sees it.
+			coins, err = at.strategyEngine.GetHyperRankCandidateCoins(
+				strategyConfig.CoinSource.HyperRankCategory,
+				strategyConfig.CoinSource.HyperRankDirection,
+				150,
+			)
+		} else {
+			coins, err = at.strategyEngine.GetCandidateCoins()
+		}
+
 		if err != nil {
-			// Log warning but don't fail - equity snapshot should still be saved
 			at.logWarnf("⚠️ Failed to get candidate coins: %v (will use empty list)", err)
 		} else {
 			candidateCoins = coins
-			logger.Infof("📋 [%s] Strategy engine fetched candidate coins: %d", at.name, len(candidateCoins))
+			if f, ok := at.trader.(interface {
+				FilterCandidateCoins([]kernel.CandidateCoin) []kernel.CandidateCoin
+			}); ok {
+				candidateCoins = f.FilterCandidateCoins(candidateCoins)
+			}
+			boardLimit := store.MaxCandidateCoins
+			if strategyConfig != nil && strategyConfig.CoinSource.HyperRankLimit > 0 {
+				boardLimit = strategyConfig.CoinSource.HyperRankLimit
+			}
+			if boardLimit > store.MaxCandidateCoins {
+				boardLimit = store.MaxCandidateCoins
+			}
+			if len(candidateCoins) > boardLimit {
+				candidateCoins = candidateCoins[:boardLimit]
+			}
+			logger.Infof("📋 [%s] Candidate board after exchange filter: %d tradable symbols", at.name, len(candidateCoins))
 		}
 	}
 
@@ -643,11 +706,12 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 
 	// 6. Build context
 	ctx := &kernel.Context{
-		CurrentTime:     time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
-		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
-		CallCount:       at.callCount,
-		BTCETHLeverage:  btcEthLeverage,
-		AltcoinLeverage: altcoinLeverage,
+		CurrentTime:        time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+		RuntimeMinutes:     int(time.Since(at.startTime).Minutes()),
+		CallCount:          at.callCount,
+		BTCETHLeverage:     btcEthLeverage,
+		AltcoinLeverage:    altcoinLeverage,
+		MarketDataExchange: at.exchange,
 		Account: kernel.AccountInfo{
 			TotalEquity:      totalEquity,
 			AvailableBalance: availableBalance,
@@ -844,4 +908,12 @@ func (at *AutoTrader) checkClaw402Balance() {
 		logger.Infof("💰 [%s] USDC Balance: $%.2f | Daily AI cost: ~$%.2f | Runway: ~%.1f days",
 			at.name, balance, dailyCost, runway)
 	}
+}
+
+func hashPreview(s string) string {
+	if s == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
 }

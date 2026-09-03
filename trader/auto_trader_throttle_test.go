@@ -2,6 +2,7 @@ package trader
 
 import (
 	"nofx/kernel"
+	"nofx/store"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,31 @@ func leveragedThrottleContext(symbol, side string, heldFor time.Duration, pnlPct
 				UpdateTime:       time.Now().Add(-heldFor).UnixMilli(),
 			},
 		},
+	}
+}
+
+func TestTradeThrottleBlocksAICloseOnLossWhenConfigured(t *testing.T) {
+	at := &AutoTrader{
+		config: AutoTraderConfig{
+			StrategyConfig: &store.StrategyConfig{
+				RiskControl: store.RiskControlConfig{BlockAICloseOnLoss: true},
+			},
+		},
+	}
+	ctx := leveragedThrottleContext("MONUSDT", "long", 2*time.Hour, -2.0, 10)
+	ctx.Positions[0].UnrealizedPnLPct = -10.0
+
+	reason := at.tradeThrottleReason(kernel.Decision{Symbol: "MONUSDT", Action: "close_long"}, ctx, 0)
+	if !strings.Contains(reason, "AI cannot close losers") {
+		t.Fatalf("expected underwater AI close to be blocked, got %q", reason)
+	}
+
+	reason = at.tradeThrottleReason(kernel.Decision{
+		Symbol: "MONUSDT", Action: "close_long",
+		Reasoning: "code-enforced stop-loss: unrealized -10.0% <= -7.5%",
+	}, ctx, 0)
+	if reason != "" {
+		t.Fatalf("expected code-enforced loser exit to pass, got %q", reason)
 	}
 }
 
@@ -135,6 +161,23 @@ func TestTradeThrottleBlocksOpensOverCycleCap(t *testing.T) {
 	// at the cap, the next open is blocked
 	if reason := at.tradeThrottleReason(kernel.Decision{Symbol: "xyz:INTC", Action: "open_long"}, ctx, 2); !strings.Contains(reason, "2 new position") {
 		t.Fatalf("expected open beyond the 2-per-cycle cap to be blocked, got %q", reason)
+	}
+}
+
+func TestHyperliquidCloseGatesAllowFastTakeProfit(t *testing.T) {
+	at := &AutoTrader{exchange: "hyperliquid"}
+	// +1.3% price at 10x is +13% margin — Autopilot's fast book should take it.
+	ctx := leveragedThrottleContext("BTCUSDT", "long", 5*time.Minute, 13.0, 10)
+	if reason := at.tradeThrottleReason(kernel.Decision{Symbol: "BTCUSDT", Action: "close_long"}, ctx, 0); reason != "" {
+		t.Fatalf("expected Hyperliquid +1.3%% price TP to pass, got %q", reason)
+	}
+}
+
+func TestBitgetCloseGatesAllowFastTakeProfit(t *testing.T) {
+	at := &AutoTrader{exchange: "bitget"}
+	ctx := leveragedThrottleContext("HYPEUSDT", "long", 5*time.Minute, 13.0, 10)
+	if reason := at.tradeThrottleReason(kernel.Decision{Symbol: "HYPEUSDT", Action: "close_long"}, ctx, 0); reason != "" {
+		t.Fatalf("expected Bitget +1.3%% price TP to pass, got %q", reason)
 	}
 }
 

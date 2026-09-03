@@ -225,6 +225,13 @@ func isMajorAsset(symbol string) bool {
 // equity: the account equity
 // symbol: the trading symbol
 func (at *AutoTrader) enforcePositionValueRatio(positionSizeUSD float64, equity float64, symbol string) (float64, bool) {
+	if at.isOverflowExec() {
+		return positionSizeUSD, false
+	}
+	// Copy sizing is fixed_notional from copy_config; do not cap with AI altcoin ratios.
+	if at.IsCopyStrategy() {
+		return positionSizeUSD, false
+	}
 	if at.config.StrategyConfig == nil {
 		return positionSizeUSD, false
 	}
@@ -264,9 +271,13 @@ func (at *AutoTrader) applyAutopilotFullSizeOpen(decision *kernel.Decision, equi
 	if at == nil || decision == nil || at.config.StrategyConfig == nil || equity <= 0 {
 		return
 	}
+	if at.IsCopyStrategy() || at.isOverflowExec() {
+		return
+	}
 
 	cfg := at.config.StrategyConfig
-	if cfg.CoinSource.SourceType != "vergex_signal" {
+	src := cfg.CoinSource.SourceType
+	if src != "vergex_signal" && src != "hyper_rank" {
 		return
 	}
 
@@ -319,11 +330,17 @@ func (at *AutoTrader) enforceMinPositionSize(positionSizeUSD float64) error {
 
 // enforceMaxPositions checks maximum positions count (CODE ENFORCED)
 func (at *AutoTrader) enforceMaxPositions(currentPositionCount int) error {
+	if at.isOverflowExec() {
+		return nil
+	}
 	if at.config.StrategyConfig == nil {
 		return nil
 	}
 
 	maxPositions := at.config.StrategyConfig.RiskControl.MaxPositions
+	if at.IsCopyStrategy() && at.config.StrategyConfig.CopyConfig != nil {
+		maxPositions = at.config.StrategyConfig.CopyConfig.MaxPositions
+	}
 	if maxPositions <= 0 {
 		maxPositions = 3 // Default: 3 positions
 	}

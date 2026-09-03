@@ -196,14 +196,22 @@ type AutoTrader struct {
 	userID                string             // User ID
 	gridState             *GridState         // Grid trading state (only used when StrategyType == "grid_trading")
 	claw402WalletAddr     string             // Claw402 wallet address (derived from private key at start)
-	consecutiveAIFailures int                // Consecutive AI call failures
-	runtimeHealthMu       sync.RWMutex       // Guards safe mode + AI wallet health (loop writes, API reads)
-	safeMode              bool               // Safe mode: no new positions, protect existing ones
-	safeModeReason        string             // Why safe mode was activated
-	aiWalletStatus        string             // "ok"|"low"|"empty"|"unknown" — see runtime_health.go
-	aiWalletBalanceUSDC   float64            // Last observed Base USDC balance of the claw402 wallet
-	aiWalletCheckedAt     time.Time          // When the balance was last observed
-	fallbackStopsPlaced   map[string]bool    // symbol_side already given a fallback SL/TP this process
+	copyWatcher           *CopyLeaderWatcher // Real-time leader fill watcher (copy_mode=fills)
+	copyWg                sync.WaitGroup     // Waits for copy fill consumer goroutine
+	copyMu                sync.Mutex         // Serializes copy cycle, fill mirror, and drift reconcile
+	copyDriftSince        map[copyLegKey]time.Time
+	copyExtraSince        map[copyLegKey]time.Time
+	copyTransientUntil    map[string]time.Time // Per symbol/action backoff after upstream state failures
+	consecutiveAIFailures int                  // Consecutive AI call failures
+	runtimeHealthMu       sync.RWMutex         // Guards safe mode + AI wallet health (loop writes, API reads)
+	safeMode              bool                 // Safe mode: no new positions, protect existing ones
+	safeModeReason        string               // Why safe mode was activated
+	aiWalletStatus        string               // "ok"|"low"|"empty"|"unknown" — see runtime_health.go
+	aiWalletBalanceUSDC   float64              // Last observed Base USDC balance of the claw402 wallet
+	aiWalletCheckedAt     time.Time            // When the balance was last observed
+	fallbackStopsPlaced   map[string]bool      // symbol_side already given a fallback SL/TP this process
+	overflowExecDepth     int32                // >0 while executing an overflow order on this trader
+	overflowOpenSides     map[string]string    // optional in-memory overflow ledger (tests / cache)
 }
 
 // NewAutoTrader creates an automatic trader
@@ -458,6 +466,11 @@ func (at *AutoTrader) reloadStrategyConfigIfChanged() error {
 // Run runs the automatic trading main loop
 func (at *AutoTrader) Run() error {
 	at.isRunningMutex.Lock()
+	if at.isRunning {
+		at.isRunningMutex.Unlock()
+		at.logWarnf("Run() called while already running; ignoring duplicate start")
+		return nil
+	}
 	at.isRunning = true
 	at.isRunningMutex.Unlock()
 
@@ -549,9 +562,20 @@ func (at *AutoTrader) Run() error {
 		}
 	}
 
-	// Check if this is a grid trading strategy
+	// Check strategy mode: copy, grid, or AI
+	isCopyStrategy := at.IsCopyStrategy()
 	isGridStrategy := at.IsGridStrategy()
-	if isGridStrategy {
+	if isCopyStrategy {
+		cfg := at.config.StrategyConfig.CopyConfig
+		if cfg != nil {
+			cfg.Normalize()
+			if at.IsCopyFillsMode() {
+				at.logInfof("📋 Copy fills mode (leader %s, reconcile %ds)", shortAddr(cfg.LeaderAddress), cfg.ReconcileIntervalSec)
+			} else {
+				at.logInfof("📋 Copy snapshot mode (leader %s)", shortAddr(cfg.LeaderAddress))
+			}
+		}
+	} else if isGridStrategy {
 		at.logInfof("🔲 Grid trading strategy detected, initializing grid...")
 		if err := at.InitializeGrid(); err != nil {
 			at.logErrorf("❌ Failed to initialize grid: %v", err)
@@ -561,7 +585,25 @@ func (at *AutoTrader) Run() error {
 
 	// Execute immediately on first run
 	at.logInfof("▶️ Running first trading cycle immediately; next cycle starts after %v", at.config.ScanInterval)
-	if isGridStrategy {
+	if isCopyStrategy && at.IsCopyFillsMode() {
+		cfg := at.config.StrategyConfig.CopyConfig
+		if cfg != nil && cfg.CopyOnStart {
+			if err := at.RunCopyCycle(); err != nil {
+				at.logErrorf("❌ Copy bootstrap failed: %v", err)
+			}
+		}
+		at.startCopyLeaderWatcher()
+		reconcileSec := 60
+		if cfg != nil && cfg.ReconcileIntervalSec > 0 {
+			reconcileSec = cfg.ReconcileIntervalSec
+		}
+		return at.runCopyFillsLoop(time.Duration(reconcileSec) * time.Second)
+	}
+	if isCopyStrategy {
+		if err := at.RunCopyCycle(); err != nil {
+			at.logErrorf("❌ Copy execution failed: %v", err)
+		}
+	} else if isGridStrategy {
 		if err := at.RunGridCycle(); err != nil {
 			at.logErrorf("❌ Grid execution failed: %v", err)
 		}
@@ -585,7 +627,11 @@ func (at *AutoTrader) Run() error {
 
 		select {
 		case <-ticker.C:
-			if isGridStrategy {
+			if isCopyStrategy {
+				if err := at.RunCopyCycle(); err != nil {
+					at.logErrorf("❌ Copy execution failed: %v", err)
+				}
+			} else if isGridStrategy {
 				if err := at.RunGridCycle(); err != nil {
 					at.logErrorf("❌ Grid execution failed: %v", err)
 				}
@@ -615,6 +661,7 @@ func (at *AutoTrader) Stop() {
 
 	close(at.stopMonitorCh) // Notify monitoring goroutine to stop
 	at.monitorWg.Wait()     // Wait for monitoring goroutine to finish
+	at.stopCopyLeaderWatcher()
 	logger.Info("⏹ Automatic trading system stopped")
 }
 
@@ -648,6 +695,11 @@ func (at *AutoTrader) GetAIModel() string {
 // GetExchange gets exchange
 func (at *AutoTrader) GetExchange() string {
 	return at.exchange
+}
+
+// GetExchangeID returns the exchange account UUID shared by sibling copy bots.
+func (at *AutoTrader) GetExchangeID() string {
+	return at.exchangeID
 }
 
 // GetShowInCompetition returns whether trader should be shown in competition

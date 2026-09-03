@@ -22,11 +22,11 @@ const (
 	autopilotNoiseCloseHoldDuration = 3 * time.Hour
 	// Re-entering a just-closed symbol was a consistent loss source: the
 	// replay's top-20 configs cluster tightly at ~4h.
-	autopilotReentryCooldown        = 4 * time.Hour
-	earlyCloseStopLossBypassPct     = -3.0
-	earlyCloseTakeProfitBypassPct   = 8.0
-	noiseCloseLossFloorPct          = -2.0
-	noiseCloseProfitCeilingPct      = 3.0
+	autopilotReentryCooldown      = 4 * time.Hour
+	earlyCloseStopLossBypassPct   = -3.0
+	earlyCloseTakeProfitBypassPct = 8.0
+	noiseCloseLossFloorPct        = -2.0
+	noiseCloseProfitCeilingPct    = 3.0
 )
 
 // positionPricePnLPct converts the margin-based UnrealizedPnLPct reported for
@@ -121,9 +121,10 @@ func (at *AutoTrader) openThrottleReason(decision kernel.Decision, ctx *kernel.C
 		return fmt.Sprintf("trade throttle: %d open order already executed in the last hour; max is %d", openCount, autopilotMaxOpensPerHour)
 	}
 
-	if order := at.findRecentCloseOrder(symbol, time.Now().Add(-autopilotReentryCooldown)); order != nil {
+	cooldown := at.reentryCooldown()
+	if order := at.findRecentCloseOrder(symbol, time.Now().Add(-cooldown)); order != nil {
 		age := time.Since(time.UnixMilli(order.CreatedAt))
-		remaining := autopilotReentryCooldown - age
+		remaining := cooldown - age
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -133,12 +134,59 @@ func (at *AutoTrader) openThrottleReason(decision kernel.Decision, ctx *kernel.C
 	return ""
 }
 
+type closeGates struct {
+	minHold, noiseHold                        time.Duration
+	slBypass, tpBypass, noiseFloor, noiseCeil float64
+}
+
+func (at *AutoTrader) reentryCooldown() time.Duration {
+	if at != nil && strings.EqualFold(at.exchange, "hyperliquid") {
+		return 30 * time.Minute
+	}
+	return autopilotReentryCooldown
+}
+
+// closeGates uses the fast book on Hyperliquid and Bitget so $2–$10 dollar
+// targets can actually close. NFI and other venues stay on the slow replay book.
+func (at *AutoTrader) closeGates() closeGates {
+	if at != nil && (strings.EqualFold(at.exchange, "hyperliquid") || strings.EqualFold(at.exchange, "bitget")) {
+		return closeGates{
+			minHold:    20 * time.Minute,
+			noiseHold:  40 * time.Minute,
+			slBypass:   -1.2,
+			tpBypass:   1.2,
+			noiseFloor: -0.8,
+			noiseCeil:  0.8,
+		}
+	}
+	return closeGates{
+		minHold:    autopilotMinHoldDuration,
+		noiseHold:  autopilotNoiseCloseHoldDuration,
+		slBypass:   earlyCloseStopLossBypassPct,
+		tpBypass:   earlyCloseTakeProfitBypassPct,
+		noiseFloor: noiseCloseLossFloorPct,
+		noiseCeil:  noiseCloseProfitCeilingPct,
+	}
+}
+
+func isCodeEnforcedExit(reasoning string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(reasoning)), "code-enforced")
+}
+
+func (at *AutoTrader) blockAICloseOnLoss() bool {
+	if at == nil || at.config.StrategyConfig == nil {
+		return false
+	}
+	return at.config.StrategyConfig.RiskControl.BlockAICloseOnLoss
+}
+
 func (at *AutoTrader) closeThrottleReason(decision kernel.Decision, ctx *kernel.Context) string {
 	symbol := normalizedDecisionSymbol(decision.Symbol)
 	side := closeActionSide(decision.Action)
 	if symbol == "" || side == "" {
 		return ""
 	}
+	gates := at.closeGates()
 
 	pos := findContextPosition(ctx, symbol, side)
 	pnlPct := 0.0
@@ -148,7 +196,18 @@ func (at *AutoTrader) closeThrottleReason(decision kernel.Decision, ctx *kernel.
 		entryTime = pos.UpdateTime
 	}
 
-	if order := at.findRecentOpenOrder(symbol, side, time.Now().Add(-autopilotNoiseCloseHoldDuration)); order != nil && order.CreatedAt > entryTime {
+	if isCodeEnforcedExit(decision.Reasoning) {
+		return ""
+	}
+
+	if at.blockAICloseOnLoss() && pos != nil && pos.UnrealizedPnLPct < 0 {
+		return fmt.Sprintf(
+			"trade throttle: %s %s is underwater (%.1f%% margin PnL); AI cannot close losers — wait for code-enforced SL/TP only",
+			symbol, side, pos.UnrealizedPnLPct,
+		)
+	}
+
+	if order := at.findRecentOpenOrder(symbol, side, time.Now().Add(-gates.noiseHold)); order != nil && order.CreatedAt > entryTime {
 		entryTime = order.CreatedAt
 	}
 	if entryTime <= 0 {
@@ -159,41 +218,41 @@ func (at *AutoTrader) closeThrottleReason(decision kernel.Decision, ctx *kernel.
 	if heldFor < 0 {
 		heldFor = 0
 	}
-	if heldFor >= autopilotMinHoldDuration {
-		if heldFor >= autopilotNoiseCloseHoldDuration ||
-			pnlPct <= noiseCloseLossFloorPct ||
-			pnlPct >= noiseCloseProfitCeilingPct {
+	if heldFor >= gates.minHold {
+		if heldFor >= gates.noiseHold ||
+			pnlPct <= gates.noiseFloor ||
+			pnlPct >= gates.noiseCeil {
 			return ""
 		}
 
-		remaining := autopilotNoiseCloseHoldDuration - heldFor
+		remaining := gates.noiseHold - heldFor
 		return fmt.Sprintf(
 			"trade throttle: %s %s has been held for %s with price PnL %.2f%%; it is still inside the noise band %.1f%% to %.1f%%, so wait about %s before a flat/small close",
 			symbol,
 			side,
 			roundDuration(heldFor),
 			pnlPct,
-			noiseCloseLossFloorPct,
-			noiseCloseProfitCeilingPct,
+			gates.noiseFloor,
+			gates.noiseCeil,
 			roundDuration(remaining),
 		)
 	}
 
 	// Do not block true risk exits or unusually strong take-profit exits.
-	if pnlPct <= earlyCloseStopLossBypassPct || pnlPct >= earlyCloseTakeProfitBypassPct {
+	if pnlPct <= gates.slBypass || pnlPct >= gates.tpBypass {
 		return ""
 	}
 
-	remaining := autopilotMinHoldDuration - heldFor
+	remaining := gates.minHold - heldFor
 	return fmt.Sprintf(
 		"trade throttle: %s %s has only been held for %s with price PnL %.2f%%; min AI-managed hold is %s unless price loss <= %.1f%% or price profit >= %.1f%%",
 		symbol,
 		side,
 		roundDuration(heldFor),
 		pnlPct,
-		roundDuration(autopilotMinHoldDuration),
-		earlyCloseStopLossBypassPct,
-		earlyCloseTakeProfitBypassPct,
+		roundDuration(gates.minHold),
+		gates.slBypass,
+		gates.tpBypass,
 	) + fmt.Sprintf("; wait about %s", roundDuration(remaining))
 }
 
@@ -236,16 +295,24 @@ func (at *AutoTrader) countRecentOpenOrders(since time.Time) (int, error) {
 		return 0, err
 	}
 	sinceMs := since.UTC().UnixMilli()
-	count := 0
+	// Bitget market opens often split into several FILLED rows at the same ms.
+	// Count one logical open per symbol+side per minute, not per partial fill.
+	seen := make(map[string]struct{})
 	for _, order := range orders {
 		if order == nil || order.CreatedAt < sinceMs || isCanceledOrder(order) {
 			continue
 		}
-		if isOpenAction(order.OrderAction) {
-			count++
+		if !isOpenAction(order.OrderAction) {
+			continue
 		}
+		minute := order.CreatedAt / (60 * 1000)
+		key := normalizedDecisionSymbol(order.Symbol) + "|" + strings.ToLower(strings.TrimSpace(order.OrderAction)) + "|" + fmt.Sprint(minute)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 	}
-	return count, nil
+	return len(seen), nil
 }
 
 func (at *AutoTrader) findRecentCloseOrder(symbol string, since time.Time) *store.TraderOrder {

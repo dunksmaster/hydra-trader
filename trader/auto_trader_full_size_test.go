@@ -52,3 +52,22 @@ func TestApplyAutopilotFullSizeOpenSkipsNonClaw402Strategies(t *testing.T) {
 		t.Fatalf("non-Claw402 strategies should not be rewritten, got leverage=%d size=%.2f", decision.Leverage, decision.PositionSizeUSD)
 	}
 }
+
+func TestApplyAutopilotFullSizeOpenForHyperRank(t *testing.T) {
+	cfg := store.GetDefaultStrategyConfig("en")
+	cfg.CoinSource.SourceType = "hyper_rank"
+	cfg.RiskControl.BTCETHMaxLeverage = 10
+	cfg.RiskControl.BTCETHMaxPositionValueRatio = 5
+
+	at := &AutoTrader{config: AutoTraderConfig{StrategyConfig: &cfg}}
+	decision := &kernel.Decision{
+		Symbol:          "BTCUSDT",
+		Action:          "open_long",
+		Leverage:        3,
+		PositionSizeUSD: 12,
+	}
+	at.applyAutopilotFullSizeOpen(decision, 47)
+	if decision.Leverage != 10 || decision.PositionSizeUSD != 235 {
+		t.Fatalf("hyper_rank Autopilot should full-size, got lev=%d size=%.2f", decision.Leverage, decision.PositionSizeUSD)
+	}
+}

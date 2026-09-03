@@ -9,6 +9,7 @@ import (
 	"nofx/market"
 	"nofx/store"
 	"nofx/telemetry"
+	"strings"
 	"time"
 )
 
@@ -253,6 +254,34 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 	return result, nil
 }
 
+// emitImmediateCloseTrade sends Telegram close alerts for OrderSync exchanges without
+// waiting for fill replay (Bitget UTA sometimes mislabels close fills as opens).
+func (at *AutoTrader) emitImmediateCloseTrade(orderID, symbol, action, positionSide string, quantity, price, entryPrice float64) {
+	if quantity <= 0 || price <= 0 {
+		return
+	}
+	pnl := 0.0
+	if entryPrice > 0 {
+		if positionSide == "LONG" {
+			pnl = (price - entryPrice) * quantity
+		} else {
+			pnl = (entryPrice - price) * quantity
+		}
+		pnl = math.Round(pnl*100) / 100
+	}
+	events.EmitTrade(events.TradeEvent{
+		TraderID:     at.id,
+		ExchangeType: at.exchange,
+		Symbol:       symbol,
+		Side:         positionSide,
+		Action:       action,
+		Quantity:     quantity,
+		Price:        price,
+		RealizedPnL:  pnl,
+		OrderID:      orderID,
+	})
+}
+
 // recordAndConfirmOrder polls order status for actual fill data and records position
 // action: open_long, open_short, close_long, close_short
 // entryPrice: entry price when closing (0 when opening)
@@ -292,10 +321,13 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 	var actualQty = quantity
 	var fee float64
 
-	// Exchanges with OrderSync: Skip immediate order recording, let OrderSync handle it
-	// This ensures accurate data from GetTrades API and avoids duplicate records
+	// Exchanges with OrderSync: defer order rows to sync, but emit close alerts immediately
+	// so Telegram shows CLOSED + PnL without waiting for fill classification.
 	switch at.exchange {
 	case "binance", "lighter", "hyperliquid", "bybit", "okx", "bitget", "aster", "kucoin", "gate":
+		if strings.HasPrefix(action, "close_") {
+			at.emitImmediateCloseTrade(orderID, symbol, action, positionSide, quantity, price, entryPrice)
+		}
 		logger.Infof("  📝 Order submitted (id: %s), will be synced by OrderSync", orderID)
 		return
 	}

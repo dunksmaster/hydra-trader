@@ -38,6 +38,16 @@ func currentAccountEquity(balance map[string]interface{}, availableBalance float
 
 // executeDecisionWithRecord executes AI decision and records detailed information
 func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+	if decision != nil {
+		if resolved := at.resolveLiveSymbol(decision.Symbol); resolved != "" && resolved != decision.Symbol {
+			at.logInfof("Resolved decision symbol %s → %s", decision.Symbol, resolved)
+			decision.Symbol = resolved
+		}
+		if err := at.blockAIOnOverflowLeg(decision.Symbol, decision.Action); err != nil {
+			at.logInfof("🛡️ %v", err)
+			return err
+		}
+	}
 	switch decision.Action {
 	case "open_long":
 		return at.executeOpenLongWithRecord(decision, actionRecord)
@@ -66,7 +76,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	}
 
 	// [CODE ENFORCED] Check max positions limit
-	if err := at.enforceMaxPositions(len(positions)); err != nil {
+	if err := at.enforceMaxPositions(at.effectivePositionCountForRisk(positions)); err != nil {
 		return err
 	}
 
@@ -172,7 +182,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	}
 
 	// [CODE ENFORCED] Check max positions limit
-	if err := at.enforceMaxPositions(len(positions)); err != nil {
+	if err := at.enforceMaxPositions(at.effectivePositionCountForRisk(positions)); err != nil {
 		return err
 	}
 
@@ -285,8 +295,8 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	var entryPrice float64
 	var quantity float64
 
-	// First try to get from local database (more accurate for quantity)
-	if at.store != nil {
+	// Overflow closes must use live exchange qty — local DB may hold legacy full-mirror size.
+	if !at.isOverflowExec() && at.store != nil {
 		if openPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, normalizedSymbol, "LONG"); err == nil && openPos != nil {
 			quantity = openPos.Quantity
 			entryPrice = openPos.EntryPrice
@@ -294,7 +304,6 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 		}
 	}
 
-	// Fallback to exchange API if local data not found
 	if quantity == 0 {
 		positions, err := at.trader.GetPositions()
 		if err == nil {
@@ -313,8 +322,15 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 		logger.Infof("  📊 Using exchange position data: qty=%.8f, entry=%.2f", quantity, entryPrice)
 	}
 
-	// Close position
-	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = close all
+	// Close position (0 = close all; decision.Quantity = partial close)
+	closeQty := 0.0
+	if decision.Quantity > 0 {
+		closeQty = decision.Quantity
+		if closeQty > quantity {
+			closeQty = quantity
+		}
+	}
+	order, err := at.trader.CloseLong(decision.Symbol, closeQty)
 	if err != nil {
 		return fmt.Errorf("failed to close long position for %s: %w", decision.Symbol, err)
 	}
@@ -325,7 +341,11 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	}
 
 	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice)
+	confirmedQty := quantity
+	if closeQty > 0 {
+		confirmedQty = closeQty
+	}
+	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", confirmedQty, marketData.CurrentPrice, 0, entryPrice)
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -349,8 +369,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	var entryPrice float64
 	var quantity float64
 
-	// First try to get from local database (more accurate for quantity)
-	if at.store != nil {
+	if !at.isOverflowExec() && at.store != nil {
 		if openPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, normalizedSymbol, "SHORT"); err == nil && openPos != nil {
 			quantity = openPos.Quantity
 			entryPrice = openPos.EntryPrice
@@ -358,7 +377,6 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 		}
 	}
 
-	// Fallback to exchange API if local data not found
 	if quantity == 0 {
 		positions, err := at.trader.GetPositions()
 		if err == nil {
@@ -377,8 +395,15 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 		logger.Infof("  📊 Using exchange position data: qty=%.8f, entry=%.2f", quantity, entryPrice)
 	}
 
-	// Close position
-	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = close all
+	// Close position (0 = close all; decision.Quantity = partial close)
+	closeQty := 0.0
+	if decision.Quantity > 0 {
+		closeQty = decision.Quantity
+		if closeQty > quantity {
+			closeQty = quantity
+		}
+	}
+	order, err := at.trader.CloseShort(decision.Symbol, closeQty)
 	if err != nil {
 		return fmt.Errorf("failed to close short position for %s: %w", decision.Symbol, err)
 	}
@@ -389,7 +414,11 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	}
 
 	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice)
+	confirmedQty := quantity
+	if closeQty > 0 {
+		confirmedQty = closeQty
+	}
+	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", confirmedQty, marketData.CurrentPrice, 0, entryPrice)
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -427,16 +456,26 @@ func (at *AutoTrader) applyDefaultProtectivePrices(decision *kernel.Decision, en
 	applyDefaultProtectivePrices(decision, entry)
 }
 
+type combinedTPSLTrader interface {
+	SetTPSL(symbol, positionSide string, quantity, stopLoss, takeProfit float64) error
+}
+
 func (at *AutoTrader) placeProtectiveOrders(symbol, side string, quantity, stopLoss, takeProfit float64) error {
 	if stopLoss <= 0 {
 		return fmt.Errorf("refusing to send stop_loss=0 to the exchange")
 	}
-	if err := at.trader.SetStopLoss(symbol, side, quantity, stopLoss); err != nil {
-		return fmt.Errorf("stop loss: %w", err)
-	}
-	if takeProfit > 0 {
-		if err := at.trader.SetTakeProfit(symbol, side, quantity, takeProfit); err != nil {
-			at.logErrorf("🛡️ Failed to set take profit on %s: %v", symbol, err)
+	if combined, ok := at.trader.(combinedTPSLTrader); ok {
+		if err := combined.SetTPSL(symbol, side, quantity, stopLoss, takeProfit); err != nil {
+			return fmt.Errorf("stop loss: %w", err)
+		}
+	} else {
+		if err := at.trader.SetStopLoss(symbol, side, quantity, stopLoss); err != nil {
+			return fmt.Errorf("stop loss: %w", err)
+		}
+		if takeProfit > 0 {
+			if err := at.trader.SetTakeProfit(symbol, side, quantity, takeProfit); err != nil {
+				at.logErrorf("🛡️ Failed to set take profit on %s: %v", symbol, err)
+			}
 		}
 	}
 	if at.fallbackStopsPlaced == nil {
