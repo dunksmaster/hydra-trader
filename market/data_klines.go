@@ -14,8 +14,8 @@ import (
 
 // Note: Kline data now uses free/open API (coinank_api.Kline) which doesn't require authentication
 
-// getKlinesFromCoinAnk fetches kline data from CoinAnk API (replacement for WSMonitorCli)
-func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int) ([]Kline, error) {
+// getKlinesFromCoinAnk fetches kline data from CoinAnk API (replacement for WSMonitorCli).
+func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int, allowBinanceFallback bool) ([]Kline, error) {
 	// Map interval string to coinank enum
 	var coinankInterval coinank_enum.Interval
 	switch interval {
@@ -79,8 +79,7 @@ func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int) ([]Kline
 	// Use "To" side to search backward from current time (get historical klines)
 	coinankKlines, err := coinank_api.Kline(ctx, symbol, coinankExchange, ts, coinank_enum.To, limit, coinankInterval)
 	if err != nil || len(coinankKlines) == 0 {
-		// If exchange-specific data fails or returns empty, fallback to Binance
-		if coinankExchange != coinank_enum.Binance {
+		if allowBinanceFallback && coinankExchange != coinank_enum.Binance {
 			if err != nil {
 				logger.Warnf("⚠️ CoinAnk %s data failed, falling back to Binance: %v", exchange, err)
 			} else {
@@ -92,6 +91,8 @@ func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int) ([]Kline
 			}
 		} else if err != nil {
 			return nil, fmt.Errorf("CoinAnk API error: %w", err)
+		} else {
+			return nil, fmt.Errorf("CoinAnk %s %s data empty for %s", exchange, interval, symbol)
 		}
 	}
 
@@ -411,7 +412,7 @@ func GetBoxData(symbol string) (*BoxData, error) {
 	if IsXyzDexAsset(symbol) {
 		klines, err = getKlinesFromHyperliquid(symbol, "1h", LongBoxPeriod)
 	} else {
-		klines, err = getKlinesFromCoinAnk(symbol, "1h", "binance", LongBoxPeriod)
+		klines, err = getKlinesFromCoinAnk(symbol, "1h", "binance", LongBoxPeriod, true)
 	}
 
 	if err != nil {

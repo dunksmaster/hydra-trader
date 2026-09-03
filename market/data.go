@@ -52,7 +52,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		}
 	} else {
 		// Use CoinAnk for regular crypto assets with exchange-specific data
-		klines3m, err = getKlinesFromCoinAnk(symbol, "3m", exchange, 100)
+		klines3m, err = getKlinesFromCoinAnk(symbol, "3m", exchange, 100, true)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 3-minute K-line from CoinAnk (%s): %v", exchange, err)
 		}
@@ -71,7 +71,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from Hyperliquid: %v", err)
 		}
 	} else {
-		klines4h, err = getKlinesFromCoinAnk(symbol, "4h", exchange, 100)
+		klines4h, err = getKlinesFromCoinAnk(symbol, "4h", exchange, 100, true)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from CoinAnk (%s): %v", exchange, err)
 		}
@@ -141,23 +141,52 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	}, nil
 }
 
-// GetWithTimeframes retrieves market data for specified multiple timeframes
-// timeframes: list of timeframes, e.g. ["5m", "15m", "1h", "4h"]
-// primaryTimeframe: primary timeframe (used for calculating current indicators), defaults to timeframes[0]
-// count: number of K-lines for each timeframe
+// GetWithTimeframes retrieves market data for specified multiple timeframes.
+// Klines default to Binance when no exchange is specified.
 func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe string, count int) (*Data, error) {
+	return GetWithTimeframesForExchange(symbol, timeframes, primaryTimeframe, count, "binance", true)
+}
+
+// NormalizeKlineExchange maps trader exchange ids to CoinAnk exchange names.
+func NormalizeKlineExchange(exchange string) string {
+	switch strings.ToLower(strings.TrimSpace(exchange)) {
+	case "bitget":
+		return "bitget"
+	case "hyperliquid":
+		return "hyperliquid"
+	case "bybit":
+		return "bybit"
+	case "okx", "okex":
+		return "okx"
+	case "gate", "gateio":
+		return "gate"
+	case "aster":
+		return "aster"
+	case "binance":
+		return "binance"
+	default:
+		if exchange == "" {
+			return "binance"
+		}
+		return "binance"
+	}
+}
+
+// GetWithTimeframesForExchange fetches OHLCV from CoinAnk for the given exchange.
+// When allowBinanceFallback is false (Bitget traders), a failed fetch returns an
+// error instead of silently substituting Binance candles.
+func GetWithTimeframesForExchange(symbol string, timeframes []string, primaryTimeframe string, count int, exchange string, allowBinanceFallback bool) (*Data, error) {
 	symbol = Normalize(symbol)
+	exchange = NormalizeKlineExchange(exchange)
 
 	if len(timeframes) == 0 {
 		return nil, fmt.Errorf("at least one timeframe is required")
 	}
 
-	// If primary timeframe is not specified, use the first one
 	if primaryTimeframe == "" {
 		primaryTimeframe = timeframes[0]
 	}
 
-	// Ensure primary timeframe is in the list
 	hasPrimary := false
 	for _, tf := range timeframes {
 		if tf == primaryTimeframe {
@@ -169,30 +198,24 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		timeframes = append([]string{primaryTimeframe}, timeframes...)
 	}
 
-	// Store data for all timeframes
 	timeframeData := make(map[string]*TimeframeSeriesData)
 	var primaryKlines []Kline
-
-	// Check if this is an xyz dex asset (use Hyperliquid API)
 	isXyzAsset := IsXyzDexAsset(symbol)
 
-	// Get K-line data for each timeframe
 	for _, tf := range timeframes {
 		var klines []Kline
 		var err error
 
 		if isXyzAsset {
-			// Use Hyperliquid API for xyz dex assets
 			klines, err = getKlinesFromHyperliquid(symbol, tf, 200)
 			if err != nil {
 				logger.Infof("⚠️ Failed to get %s %s K-line from Hyperliquid: %v", symbol, tf, err)
 				continue
 			}
 		} else {
-			// Use CoinAnk for regular crypto assets (default to Binance)
-			klines, err = getKlinesFromCoinAnk(symbol, tf, "binance", 200)
+			klines, err = getKlinesFromCoinAnk(symbol, tf, exchange, 200, allowBinanceFallback)
 			if err != nil {
-				logger.Infof("⚠️ Failed to get %s %s K-line from CoinAnk: %v", symbol, tf, err)
+				logger.Infof("⚠️ Failed to get %s %s K-line from CoinAnk (%s): %v", symbol, tf, exchange, err)
 				continue
 			}
 		}
@@ -202,44 +225,36 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 			continue
 		}
 
-		// Save primary timeframe K-lines for calculating base indicators
 		if tf == primaryTimeframe {
 			primaryKlines = klines
 		}
 
-		// Calculate series data for this timeframe (use count from config)
 		seriesData := calculateTimeframeSeries(klines, tf, count)
 		timeframeData[tf] = seriesData
 	}
 
-	// If primary timeframe data is empty, return error
 	if len(primaryKlines) == 0 {
 		return nil, fmt.Errorf("Primary timeframe %s K-line data is empty", primaryTimeframe)
 	}
 
-	// Data staleness detection
 	if isStaleData(primaryKlines, symbol) {
 		logger.Infof("⚠️  WARNING: %s detected stale data (consecutive price freeze), skipping symbol", symbol)
 		return nil, fmt.Errorf("%s data is stale, possible cache failure", symbol)
 	}
 
-	// Calculate current indicators (based on primary timeframe latest data)
 	currentPrice := primaryKlines[len(primaryKlines)-1].Close
 	currentEMA20 := calculateEMA(primaryKlines, 20)
 	currentMACD := calculateMACD(primaryKlines)
 	currentRSI7 := calculateRSI(primaryKlines, 7)
 
-	// Calculate price changes
-	priceChange1h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 60)  // 1 hour
-	priceChange4h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 240) // 4 hours
+	priceChange1h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 60)
+	priceChange4h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 240)
 
-	// Get OI data
 	oiData, err := getOpenInterestData(symbol)
 	if err != nil {
 		oiData = &OIData{Latest: 0, Average: 0}
 	}
 
-	// Get Funding Rate
 	fundingRate, _ := getFundingRate(symbol)
 
 	return &Data{
@@ -559,7 +574,11 @@ func IsXyzDexAsset(symbol string) bool {
 // For crypto: ensures it's a USDT trading pair
 // For xyz dex assets (stocks, forex, commodities): uses xyz: prefix without USDT suffix
 func Normalize(symbol string) string {
-	symbol = strings.ToUpper(symbol)
+	trimmed := strings.TrimSpace(symbol)
+	if strings.HasPrefix(trimmed, "@") {
+		return trimmed
+	}
+	symbol = strings.ToUpper(trimmed)
 	if strings.HasSuffix(symbol, "-USDC") {
 		return hyperliquid.FormatCoinForAPI(symbol)
 	}

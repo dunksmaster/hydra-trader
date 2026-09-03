@@ -9,10 +9,9 @@ import (
 
 // GetPositions gets all positions (including xyz dex positions)
 func (t *HyperliquidTrader) GetPositions() ([]map[string]interface{}, error) {
-	// Get account status
-	accountState, err := t.exchange.Info().UserState(t.ctx, t.walletAddr)
+	accountState, err := userStateWithRetry(t)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get positions: %w", err)
+		return nil, fmt.Errorf("failed to get positions: failed to fetch user state: %w", err)
 	}
 
 	var result []map[string]interface{}

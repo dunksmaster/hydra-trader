@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
+	"math"
 	"nofx/logger"
 	hlprovider "nofx/provider/hyperliquid"
 	"strconv"
@@ -82,6 +83,19 @@ func isXyzDexAsset(symbol string) bool {
 // Examples: "BTCUSDT" -> "BTC", "TSLA" -> "xyz:TSLA", "SAMSUNG-USDC" -> "xyz:SMSN".
 func convertSymbolToHyperliquid(symbol string) string {
 	return hlprovider.FormatCoinForAPI(symbol)
+}
+
+func sameHyperliquidSymbol(posSymbol string, aliases ...string) bool {
+	posCoin := convertSymbolToHyperliquid(posSymbol)
+	for _, alias := range aliases {
+		if alias == "" {
+			continue
+		}
+		if posSymbol == alias || posCoin == convertSymbolToHyperliquid(alias) {
+			return true
+		}
+	}
+	return false
 }
 
 // absFloat returns absolute value of float
@@ -253,51 +267,32 @@ func (t *HyperliquidTrader) getSzDecimals(coin string) int {
 // roundToSzDecimals rounds quantity to correct precision
 func (t *HyperliquidTrader) roundToSzDecimals(coin string, quantity float64) float64 {
 	szDecimals := t.getSzDecimals(coin)
-
-	// Calculate multiplier (10^szDecimals)
-	multiplier := 1.0
-	for i := 0; i < szDecimals; i++ {
-		multiplier *= 10.0
-	}
-
-	// Round
-	return float64(int(quantity*multiplier+0.5)) / multiplier
+	multiplier := math.Pow10(szDecimals)
+	return math.Round(quantity*multiplier) / multiplier
 }
 
-// roundPriceToSigfigs rounds price to 5 significant figures
-// Hyperliquid requires prices to use 5 significant figures
+// roundToSzDecimalsFloor rounds quantity down to coin precision (safe for reduce-only closes).
+func (t *HyperliquidTrader) roundToSzDecimalsFloor(coin string, quantity float64) float64 {
+	szDecimals := t.getSzDecimals(coin)
+	multiplier := math.Pow10(szDecimals)
+	return math.Floor(quantity*multiplier) / multiplier
+}
+
+// roundPriceForCoin applies Hyperliquid perp price rules for a specific coin.
+func (t *HyperliquidTrader) roundPriceForCoin(coin string, price float64) float64 {
+	szDecimals := t.getSzDecimals(coin)
+	if strings.HasPrefix(coin, "xyz:") {
+		szDecimals = t.getXyzSzDecimals(coin)
+	}
+	return WireSafeHyperliquidPerpPrice(price, szDecimals)
+}
+
+// roundPriceForSymbol applies Hyperliquid perp price rules using a trading symbol.
+func (t *HyperliquidTrader) roundPriceForSymbol(symbol string, price float64) float64 {
+	return t.roundPriceForCoin(convertSymbolToHyperliquid(symbol), price)
+}
+
+// roundPriceToSigfigs rounds price using default szDecimals when coin is unknown.
 func (t *HyperliquidTrader) roundPriceToSigfigs(price float64) float64 {
-	if price == 0 {
-		return 0
-	}
-
-	const sigfigs = 5 // Hyperliquid standard: 5 significant figures
-
-	// Calculate price magnitude
-	var magnitude float64
-	if price < 0 {
-		magnitude = -price
-	} else {
-		magnitude = price
-	}
-
-	// Calculate required multiplier
-	multiplier := 1.0
-	for magnitude >= 10 {
-		magnitude /= 10
-		multiplier /= 10
-	}
-	for magnitude < 1 {
-		magnitude *= 10
-		multiplier *= 10
-	}
-
-	// Apply significant figures precision
-	for i := 0; i < sigfigs-1; i++ {
-		multiplier *= 10
-	}
-
-	// Round
-	rounded := float64(int(price*multiplier+0.5)) / multiplier
-	return rounded
+	return FormatHyperliquidPerpPrice(price, 4)
 }

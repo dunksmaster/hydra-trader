@@ -215,6 +215,28 @@ func (t *HyperliquidTrader) GetBalance() (map[string]interface{}, error) {
 	return result, nil
 }
 
+// GetPerpAccountSummary returns account value and margin in use straight from the
+// perp margin summary, skipping the unified-account consistency checks that make
+// GetBalance refuse to answer. It is a degraded fallback for callers that must
+// keep working when GetBalance errors, not a replacement for it.
+func (t *HyperliquidTrader) GetPerpAccountSummary() (accountValue, totalMarginUsed float64, err error) {
+	accountState, err := t.exchange.Info().UserState(t.ctx, t.walletAddr)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get account information: %w", err)
+	}
+	summary := accountState.MarginSummary
+	if t.isCrossMargin {
+		summary = accountState.CrossMarginSummary
+	}
+	if accountValue, err = types.ParseFloatField("accountValue", summary.AccountValue); err != nil {
+		return 0, 0, err
+	}
+	if totalMarginUsed, err = types.ParseFloatField("totalMarginUsed", summary.TotalMarginUsed); err != nil {
+		return 0, 0, err
+	}
+	return accountValue, totalMarginUsed, nil
+}
+
 type hyperliquidBalanceBreakdown struct {
 	TotalWalletBalance    float64
 	TotalEquity           float64

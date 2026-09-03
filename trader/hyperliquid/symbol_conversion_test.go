@@ -16,3 +16,15 @@ func TestConvertSymbolToHyperliquidXYZAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestSameHyperliquidSymbolMatchesBareTicker(t *testing.T) {
+	if !sameHyperliquidSymbol("BTCUSDT", "BTC") {
+		t.Fatal("BTCUSDT must match AI shorthand BTC")
+	}
+	if !sameHyperliquidSymbol("SOLUSDT", "SOL", "SOLUSDT") {
+		t.Fatal("SOLUSDT must match SOL")
+	}
+	if sameHyperliquidSymbol("BTCUSDT", "ETH") {
+		t.Fatal("BTCUSDT must not match ETH")
+	}
+}
