@@ -30,6 +30,7 @@ type Store struct {
 	grid           *GridStore
 	aiCharge       *AIChargeStore
 	telegramConfig TelegramConfigStore
+	copyOverflow   *CopyOverflowStore
 
 	mu sync.RWMutex
 }
@@ -164,6 +165,9 @@ func (s *Store) initTables() error {
 	if err := s.AICharge().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize AI charge tables: %w", err)
 	}
+	if err := s.CopyOverflow().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize copy overflow tables: %w", err)
+	}
 	return nil
 }
 
@@ -295,6 +299,16 @@ func (s *Store) AICharge() *AIChargeStore {
 		s.aiCharge = NewAIChargeStore(s.gdb)
 	}
 	return s.aiCharge
+}
+
+// CopyOverflow gets copy overflow ledger storage
+func (s *Store) CopyOverflow() *CopyOverflowStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.copyOverflow == nil {
+		s.copyOverflow = NewCopyOverflowStore(s.gdb)
+	}
+	return s.copyOverflow
 }
 
 // TelegramConfig gets Telegram bot configuration storage

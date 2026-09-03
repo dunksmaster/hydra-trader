@@ -5,6 +5,36 @@ import (
 	"testing"
 )
 
+func TestStrategyConfigMarshalSeparatesCopyConfig(t *testing.T) {
+	cfg := DefaultCopyStrategyConfig()
+	cfg.LeaderAddress = "0x6859da14835424957a1e6b397d8026b1d9ff7e1e"
+	wrapped := StrategyConfig{
+		StrategyType: "copy_trading",
+		CopyConfig:   &cfg,
+	}
+
+	raw, err := json.Marshal(wrapped)
+	if err != nil {
+		t.Fatalf("marshal copy config: %v", err)
+	}
+
+	var asMap map[string]any
+	if err := json.Unmarshal(raw, &asMap); err != nil {
+		t.Fatalf("unmarshal copy config map: %v", err)
+	}
+	if asMap["strategy_type"] != "copy_trading" {
+		t.Fatalf("expected copy strategy_type, got %v", asMap["strategy_type"])
+	}
+	if _, ok := asMap["copy_config"]; !ok {
+		t.Fatalf("expected copy_config in JSON: %s", string(raw))
+	}
+	for _, key := range []string{"ai_config", "grid_config", "coin_source"} {
+		if _, ok := asMap[key]; ok {
+			t.Fatalf("did not expect %s in copy strategy JSON: %s", key, string(raw))
+		}
+	}
+}
+
 func TestStrategyConfigMarshalSeparatesGridAndAIConfig(t *testing.T) {
 	cfg := GetDefaultStrategyConfig("zh")
 	cfg.StrategyType = "grid_trading"

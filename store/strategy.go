@@ -14,6 +14,7 @@ import (
 const (
 	MaxCandidateCoins = 10
 	MaxPositions      = 8
+	CopyMaxPositions  = 20
 	MaxTimeframes     = 4
 	MinKlineCount     = 10
 	MaxKlineCount     = 30
@@ -31,6 +32,7 @@ const (
 	MinConfidence     = 50
 	MaxConfidence     = 100
 	MaxHardTakeProfit = 1000.0
+	MaxHardStopLoss   = 1000.0
 )
 
 // ClampLimits enforces product-level limits on strategy config to prevent token overflow.
@@ -138,6 +140,12 @@ func (c *StrategyConfig) ClampLimits() {
 	}
 	if c.RiskControl.HardTakeProfitMarginPct > MaxHardTakeProfit {
 		c.RiskControl.HardTakeProfitMarginPct = MaxHardTakeProfit
+	}
+	if c.RiskControl.HardStopLossMarginPct < 0 {
+		c.RiskControl.HardStopLossMarginPct = 0
+	}
+	if c.RiskControl.HardStopLossMarginPct > MaxHardStopLoss {
+		c.RiskControl.HardStopLossMarginPct = MaxHardStopLoss
 	}
 }
 
@@ -277,6 +285,8 @@ func normalizeStrategyType(value string) string {
 	switch value {
 	case "grid", "grid_strategy", "grid-trading", "grid trading", "grid_trading", "grid strategy":
 		return "grid_trading"
+	case "copy", "copy_trading", "copy-trading", "copy trading", "copy strategy":
+		return "copy_trading"
 	case "", "ai", "ai_strategy", "ai-trading", "ai trading", "ai_trading", "ai strategy", "ai smart strategy":
 		return "ai_trading"
 	default:
@@ -453,7 +463,21 @@ func MergeStrategyConfig(base StrategyConfig, patch map[string]any) (StrategyCon
 	if fmt.Sprint(patch["strategy_type"]) == "grid_trading" {
 		ensureDefaultGridConfigMap(mergedMap)
 	}
+	if fmt.Sprint(patch["strategy_type"]) == "copy_trading" {
+		ensureDefaultCopyConfigMap(mergedMap)
+	}
 	mergeJSONMaps(mergedMap, patch)
+	switch fmt.Sprint(mergedMap["strategy_type"]) {
+	case "copy_trading":
+		delete(mergedMap, "ai_config")
+		delete(mergedMap, "grid_config")
+	case "grid_trading":
+		delete(mergedMap, "ai_config")
+		delete(mergedMap, "copy_config")
+	default:
+		delete(mergedMap, "grid_config")
+		delete(mergedMap, "copy_config")
+	}
 
 	mergedJSON, err := json.Marshal(mergedMap)
 	if err != nil {
@@ -506,6 +530,46 @@ func ensureDefaultGridConfigMap(config map[string]any) {
 	config["grid_config"] = gridMap
 }
 
+func DefaultCopyStrategyConfig() CopyStrategyConfig {
+	return CopyStrategyConfig{
+		CopyMode:             "fills",
+		SizeMode:             "fixed_notional",
+		NotionalUSD:          15,
+		CopyRatio:            1.0,
+		MinNotionalUSD:       12,
+		MaxNotionalPct:       45,
+		MaxLeverage:          10,
+		MaxPositions:         2,
+		ExitMode:             "leader_plus_stop",
+		SafetyStopPct:        15,
+		SymbolBlocklist:      nil,
+		ReconcileIntervalSec: 60,
+		CopyOnStart:          true,
+		MinLeaderFillUSD:     10,
+		DryRun:               true,
+		Inverse:              false,
+	}
+}
+
+func ensureDefaultCopyConfigMap(config map[string]any) {
+	if config == nil {
+		return
+	}
+	if existing, ok := config["copy_config"].(map[string]any); ok && len(existing) > 0 {
+		return
+	}
+	defaultCopy := DefaultCopyStrategyConfig()
+	raw, err := json.Marshal(defaultCopy)
+	if err != nil {
+		return
+	}
+	var copyMap map[string]any
+	if err := json.Unmarshal(raw, &copyMap); err != nil {
+		return
+	}
+	config["copy_config"] = copyMap
+}
+
 func normalizeStrategyConfigPatch(patch map[string]any) {
 	if patch == nil {
 		return
@@ -514,6 +578,11 @@ func normalizeStrategyConfigPatch(patch map[string]any) {
 	if gridConfig, hasGrid := patch["grid_config"]; hasGrid && gridConfig != nil {
 		if _, hasType := patch["strategy_type"]; !hasType {
 			patch["strategy_type"] = "grid_trading"
+		}
+	}
+	if copyConfig, hasCopy := patch["copy_config"]; hasCopy && copyConfig != nil {
+		if _, hasType := patch["strategy_type"]; !hasType {
+			patch["strategy_type"] = "copy_trading"
 		}
 	}
 
@@ -535,12 +604,18 @@ func normalizeStrategyConfigPatch(patch map[string]any) {
 	if fmt.Sprint(patch["strategy_type"]) == "grid_trading" {
 		delete(patch, "ai_config")
 	}
+	if fmt.Sprint(patch["strategy_type"]) == "copy_trading" {
+		delete(patch, "ai_config")
+	}
 
 	if _, hasType := patch["strategy_type"]; hasType {
 		return
 	}
 	if gridConfig, hasGrid := patch["grid_config"]; hasGrid && gridConfig != nil {
 		patch["strategy_type"] = "grid_trading"
+	}
+	if copyConfig, hasCopy := patch["copy_config"]; hasCopy && copyConfig != nil {
+		patch["strategy_type"] = "copy_trading"
 	}
 }
 
@@ -635,6 +710,9 @@ type StrategyConfig struct {
 	// Grid trading configuration (only used when StrategyType == "grid_trading")
 	GridConfig *GridStrategyConfig `json:"grid_config,omitempty"`
 
+	// Copy trading configuration (only used when StrategyType == "copy_trading")
+	CopyConfig *CopyStrategyConfig `json:"copy_config,omitempty"`
+
 	// Publish settings are shared by AI and grid strategies. The database still
 	// stores the authoritative booleans on Strategy, but config JSON may carry
 	// this object for agent/frontend schema consistency.
@@ -669,6 +747,7 @@ func (c StrategyConfig) MarshalJSON() ([]byte, error) {
 		Language      string                 `json:"language,omitempty"`
 		AIConfig      *AIStrategyConfig      `json:"ai_config,omitempty"`
 		GridConfig    *GridStrategyConfig    `json:"grid_config,omitempty"`
+		CopyConfig    *CopyStrategyConfig    `json:"copy_config,omitempty"`
 		PublishConfig *PublishStrategyConfig `json:"publish_config,omitempty"`
 	}{
 		StrategyType:  strategyType,
@@ -676,9 +755,12 @@ func (c StrategyConfig) MarshalJSON() ([]byte, error) {
 		PublishConfig: c.PublishConfig,
 	}
 
-	if strategyType == "grid_trading" {
+	switch strategyType {
+	case "grid_trading":
 		out.GridConfig = c.GridConfig
-	} else {
+	case "copy_trading":
+		out.CopyConfig = c.CopyConfig
+	default:
 		out.AIConfig = &AIStrategyConfig{
 			CoinSource:     c.CoinSource,
 			Indicators:     c.Indicators,
@@ -699,6 +781,7 @@ func (c *StrategyConfig) UnmarshalJSON(data []byte) error {
 		Language      string                 `json:"language"`
 		AIConfig      *AIStrategyConfig      `json:"ai_config"`
 		GridConfig    *GridStrategyConfig    `json:"grid_config"`
+		CopyConfig    *CopyStrategyConfig    `json:"copy_config"`
 		PublishConfig *PublishStrategyConfig `json:"publish_config"`
 
 		CoinSource     *CoinSourceConfig     `json:"coin_source"`
@@ -716,6 +799,7 @@ func (c *StrategyConfig) UnmarshalJSON(data []byte) error {
 	c.StrategyType = raw.StrategyType
 	c.Language = raw.Language
 	c.GridConfig = raw.GridConfig
+	c.CopyConfig = raw.CopyConfig
 	c.PublishConfig = raw.PublishConfig
 
 	if raw.AIConfig != nil {
@@ -745,7 +829,135 @@ func (c *StrategyConfig) UnmarshalJSON(data []byte) error {
 	if strings.TrimSpace(c.StrategyType) == "" && c.GridConfig != nil {
 		c.StrategyType = "grid_trading"
 	}
+	if strings.TrimSpace(c.StrategyType) == "" && c.CopyConfig != nil {
+		c.StrategyType = "copy_trading"
+	}
+	c.StrategyType = normalizeStrategyType(c.StrategyType)
+	if c.CopyConfig != nil {
+		c.CopyConfig.Normalize()
+	}
 	return nil
+}
+
+// CopyStrategyConfig holds Hyperliquid wallet mirror settings.
+type CopyStrategyConfig struct {
+	LeaderAddress        string   `json:"leader_address"`
+	CopyMode             string   `json:"copy_mode"` // "fills" (real-time) | "snapshot" (legacy)
+	SizeMode             string   `json:"size_mode"` // "fixed_notional" | "proportional"
+	NotionalUSD          float64  `json:"notional_usd"`
+	CopyRatio            float64  `json:"copy_ratio"`
+	MinNotionalUSD       float64  `json:"min_notional_usd"`
+	MaxNotionalPct       float64  `json:"max_notional_pct"`
+	MaxLeverage          int      `json:"max_leverage"`
+	MaxPositions         int      `json:"max_positions"`
+	WalletCopySlots      int      `json:"wallet_copy_slots"` // shared-wallet margin slots across copy bots (0 = use max_positions)
+	ExitMode             string   `json:"exit_mode"`
+	SafetyStopPct        float64  `json:"safety_stop_pct"`
+	SymbolBlocklist      []string `json:"symbol_blocklist"`
+	ReconcileIntervalSec int      `json:"reconcile_interval_sec"`
+	CopyOnStart          bool     `json:"copy_on_start"`
+	MinLeaderFillUSD     float64  `json:"min_leader_fill_usd"`
+	DryRun               bool     `json:"dry_run"`
+	Inverse              bool     `json:"inverse"`
+	OverflowEnabled          bool     `json:"overflow_enabled"`
+	OverflowTraderID         string   `json:"overflow_trader_id"`
+	OverflowOnSkip           []string `json:"overflow_on_skip"`
+	OverflowNotionalUSD      float64  `json:"overflow_notional_usd"`
+	OverflowMaxPositions     int      `json:"overflow_max_positions"`
+	OverflowParallel         bool     `json:"overflow_parallel"` // mirror every HL open on overflow venue too
+	CopyLayer              int      `json:"copy_layer"`   // 1 (priority), 2 (fill free slots), or 3 (paused)
+	CopyPaused             bool     `json:"copy_paused"`  // when true, skip all new opens (closes still work)
+	LossStreak             int      `json:"loss_streak"`  // consecutive losing copy closes (net PnL <= 0)
+	PauseLossStreak        int      `json:"pause_loss_streak"` // auto-pause new opens after N losses in a row (0 = off)
+}
+
+// Normalize applies defaults and clamps copy-trading config fields.
+func (c *CopyStrategyConfig) Normalize() {
+	if c == nil {
+		return
+	}
+	defaults := DefaultCopyStrategyConfig()
+	c.LeaderAddress = strings.ToLower(strings.TrimSpace(c.LeaderAddress))
+	if c.SizeMode == "" {
+		c.SizeMode = defaults.SizeMode
+	}
+	c.SizeMode = strings.ToLower(strings.TrimSpace(c.SizeMode))
+	if c.SizeMode != "proportional" {
+		c.SizeMode = "fixed_notional"
+	}
+	if c.NotionalUSD <= 0 {
+		c.NotionalUSD = defaults.NotionalUSD
+	}
+	if c.CopyRatio <= 0 {
+		c.CopyRatio = defaults.CopyRatio
+	}
+	if c.MinNotionalUSD <= 0 {
+		c.MinNotionalUSD = defaults.MinNotionalUSD
+	}
+	if c.MaxNotionalPct <= 0 {
+		c.MaxNotionalPct = defaults.MaxNotionalPct
+	}
+	if c.MaxLeverage <= 0 {
+		c.MaxLeverage = defaults.MaxLeverage
+	}
+	if c.MaxLeverage > MaxAltLeverage {
+		c.MaxLeverage = MaxAltLeverage
+	}
+	if c.MaxPositions <= 0 {
+		c.MaxPositions = defaults.MaxPositions
+	}
+	if c.MaxPositions > CopyMaxPositions {
+		c.MaxPositions = CopyMaxPositions
+	}
+	if c.WalletCopySlots < 0 {
+		c.WalletCopySlots = 0
+	}
+	if c.ExitMode == "" {
+		c.ExitMode = defaults.ExitMode
+	}
+	c.ExitMode = strings.ToLower(strings.TrimSpace(c.ExitMode))
+	if c.ExitMode != "leader_only" {
+		c.ExitMode = "leader_plus_stop"
+	}
+	if c.SafetyStopPct <= 0 {
+		c.SafetyStopPct = defaults.SafetyStopPct
+	}
+	if c.CopyMode == "" {
+		c.CopyMode = defaults.CopyMode
+	}
+	c.CopyMode = strings.ToLower(strings.TrimSpace(c.CopyMode))
+	if c.CopyMode != "snapshot" {
+		c.CopyMode = "fills"
+	}
+	if c.ReconcileIntervalSec <= 0 {
+		c.ReconcileIntervalSec = defaults.ReconcileIntervalSec
+	}
+	if c.MinLeaderFillUSD <= 0 {
+		c.MinLeaderFillUSD = defaults.MinLeaderFillUSD
+	}
+	c.OverflowTraderID = strings.TrimSpace(c.OverflowTraderID)
+	if c.OverflowEnabled && len(c.OverflowOnSkip) == 0 {
+		c.OverflowOnSkip = []string{"already_open", "max_positions", "margin"}
+	}
+	if c.OverflowNotionalUSD < 0 {
+		c.OverflowNotionalUSD = 0
+	}
+	if c.OverflowEnabled && c.OverflowMaxPositions <= 0 {
+		c.OverflowMaxPositions = 10
+	}
+	if c.OverflowMaxPositions > CopyMaxPositions {
+		c.OverflowMaxPositions = CopyMaxPositions
+	}
+	if c.CopyLayer <= 0 {
+		c.CopyLayer = 2
+	}
+	if c.CopyLayer > 3 {
+		c.CopyLayer = 3
+	}
+	if c.CopyLayer == 3 {
+		c.CopyPaused = true
+	}
+	// Empty blocklist means copy all markets (including xyz hip-3).
 }
 
 // GridStrategyConfig grid trading specific configuration
@@ -941,6 +1153,13 @@ type RiskControlConfig struct {
 	MinConfidence int `json:"min_confidence"`
 	// Force-close at this margin-based unrealized PnL percentage. Zero disables.
 	HardTakeProfitMarginPct float64 `json:"hard_take_profit_margin_pct,omitempty"`
+	// Force-close a losing position at this margin-based unrealized loss,
+	// expressed as a positive percentage. Zero disables. Keep it below
+	// HardTakeProfitMarginPct so the book keeps a payoff ratio above 1:1.
+	HardStopLossMarginPct float64 `json:"hard_stop_loss_margin_pct,omitempty"`
+	// When true, AI close_long/close_short on underwater positions is rejected;
+	// only code-enforced hard SL/TP may exit losers.
+	BlockAICloseOnLoss bool `json:"block_ai_close_on_loss,omitempty"`
 }
 
 // NewStrategyStore creates a new StrategyStore
@@ -1033,6 +1252,7 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (AI guided)
 			MinConfidence:                78,  // Min 78% confidence (AI guided)
 			HardTakeProfitMarginPct:      15,  // Lock winners at +15% margin PnL; configurable per strategy
+			HardStopLossMarginPct:       7.5, // Cut losers at -7.5% margin PnL, half the profit lock, so the book keeps a 2:1 payoff
 		},
 	}
 
