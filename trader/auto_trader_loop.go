@@ -286,9 +286,8 @@ func (at *AutoTrader) runCycle() error {
 	// 8. Sort decisions: ensure close positions first, then open positions (prevent position stacking overflow)
 	sortedDecisions := sortDecisionsByPriority(aiDecision.Decisions)
 	sortedDecisions = at.filterDecisionsToStrategyUniverse(sortedDecisions, ctx)
-	// Per-cycle long/short coverage: if the AI left a direction uncovered, force
-	// the strongest bullish/bearish candidate (account-sized, risk-enforced).
-	sortedDecisions = at.ensureLongShortCoverage(sortedDecisions, ctx, ctx.Account.TotalEquity)
+	sortedDecisions = at.enforceVergexSignalPolicy(sortedDecisions, ctx)
+	sortedDecisions = sortDecisionsByPriority(sortedDecisions)
 
 	logger.Info("🔄 Execution order (optimized): Close positions first → Open positions later")
 	for i, d := range sortedDecisions {
@@ -321,9 +320,9 @@ func (at *AutoTrader) runCycle() error {
 		}
 	}
 
-	// Execute decisions and record results. Trade throttle is applied here,
-	// immediately before order placement, so AI churn cannot become live orders.
-	opensAllowedThisCycle := 0
+	// Execute decisions and record results. Position and exit safeguards are
+	// applied immediately before order placement.
+	opensQueuedThisCycle := 0
 	for _, d := range sortedDecisions {
 		// Check if trader is stopped before each decision (allow immediate stop during execution)
 		at.isRunningMutex.RLock()
@@ -348,17 +347,13 @@ func (at *AutoTrader) runCycle() error {
 			Success:    false,
 		}
 
-		if reason := at.tradeThrottleReason(d, ctx, opensAllowedThisCycle); reason != "" {
+		if reason := at.tradeThrottleReason(d, ctx, opensQueuedThisCycle); reason != "" {
 			at.logWarnf("🧊 %s %s blocked: %s", d.Symbol, d.Action, reason)
 			actionRecord.Error = reason
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("🧊 %s %s blocked: %s", d.Symbol, d.Action, reason))
 			record.Decisions = append(record.Decisions, actionRecord)
 			continue
 		}
-		if isOpenAction(d.Action) {
-			opensAllowedThisCycle++
-		}
-
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			at.logErrorf("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			actionRecord.Error = err.Error()
@@ -366,6 +361,9 @@ func (at *AutoTrader) runCycle() error {
 		} else {
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s succeeded", d.Symbol, d.Action))
+			if isOpenAction(d.Action) {
+				opensQueuedThisCycle++
+			}
 			// Brief delay after successful execution
 			time.Sleep(1 * time.Second)
 		}
@@ -664,6 +662,12 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		}
 
 		if err != nil {
+			// The direction board is the sole ordinary exit authority in Vergex
+			// signal mode. With open exposure, stale/missing board data must abort
+			// the cycle rather than allowing raw AI closes through.
+			if at.usesVergexSignalPolicy() && len(positionInfos) > 0 {
+				return nil, fmt.Errorf("failed to refresh Vergex direction board with open positions: %w", err)
+			}
 			at.logWarnf("⚠️ Failed to get candidate coins: %v (will use empty list)", err)
 		} else {
 			candidateCoins = coins

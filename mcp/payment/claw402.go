@@ -133,13 +133,20 @@ func NewClaw402ClientWithOptions(opts ...mcp.ClientOption) mcp.AIClient {
 
 // SetAPIKey stores the EVM private key and selects the model endpoint.
 func (c *Claw402Client) SetAPIKey(apiKey string, _ string, customModel string) {
-	hexKey := strings.TrimPrefix(apiKey, "0x")
+	// Clear first so a malformed rotation can never keep spending from the
+	// previously configured wallet.
+	c.privateKey = nil
+	c.APIKey = ""
+	hexKey := strings.TrimSpace(apiKey)
+	if len(hexKey) >= 2 && strings.EqualFold(hexKey[:2], "0x") {
+		hexKey = hexKey[2:]
+	}
 	privKey, err := crypto.HexToECDSA(hexKey)
 	if err != nil {
 		c.Log.Warnf("⚠️  [MCP] Claw402: invalid private key: %v", err)
 	} else {
 		c.privateKey = privKey
-		c.APIKey = apiKey
+		c.APIKey = hexKey
 		addr := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
 		c.Log.Infof("🔧 [MCP] Claw402 wallet: %s", addr)
 	}
@@ -249,6 +256,20 @@ func stripMaxTokens(body map[string]any) map[string]any {
 	return body
 }
 
+// applyClawModelControls prevents DeepSeek V4 from spending the gateway's
+// entire output allowance on reasoning_content and returning no final answer.
+// The gateway accepts the standard thinking control on these V4 routes.
+func applyClawModelControls(body map[string]any, model string) map[string]any {
+	if body == nil {
+		return body
+	}
+	switch model {
+	case "deepseek-v4-flash", "deepseek-v4-pro":
+		body["thinking"] = map[string]any{"type": "disabled"}
+	}
+	return body
+}
+
 // openAIToolCompat adjusts GPT-5.6 request bodies when function tools are present.
 // Claw402 routes these models through /v1/chat/completions with default
 // reasoning_effort, which OpenAI rejects alongside tools. Setting "none" enables
@@ -269,7 +290,8 @@ func (c *Claw402Client) BuildMCPRequestBody(systemPrompt, userPrompt string) map
 	if c.claudeProxy != nil {
 		return c.claudeProxy.BuildMCPRequestBody(systemPrompt, userPrompt)
 	}
-	return stripMaxTokens(c.Client.BuildMCPRequestBody(systemPrompt, userPrompt))
+	body := stripMaxTokens(c.Client.BuildMCPRequestBody(systemPrompt, userPrompt))
+	return applyClawModelControls(body, c.Model)
 }
 
 func (c *Claw402Client) BuildRequestBodyFromRequest(req *mcp.Request) map[string]any {
@@ -277,6 +299,7 @@ func (c *Claw402Client) BuildRequestBodyFromRequest(req *mcp.Request) map[string
 		return c.claudeProxy.BuildRequestBodyFromRequest(req)
 	}
 	body := stripMaxTokens(c.Client.BuildRequestBodyFromRequest(req))
+	body = applyClawModelControls(body, c.Model)
 	model := req.Model
 	if model == "" {
 		model = c.Model

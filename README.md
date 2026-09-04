@@ -222,3 +222,7 @@ Ongoing work, if any, is local-only paper-trading and backtesting against histor
 This project is licensed under **AGPL-3.0**, inherited unchanged from upstream — see [`LICENSE`](LICENSE). The AGPL's network-service clause means that running a modified version of this code as a live service to users obligates making that modified source available to those users; upstream (NoFxAiOS) has actively enforced this against at least one other project (see `docs/legal/AGPL-VIOLATION-REPORT-ChainOpera-EN.md` in this repository).
 
 This project is built directly on top of [NoFxAiOS/nofx](https://github.com/NoFxAiOS/nofx) — all of the AI-decision trading core, the exchange integration framework, and the web dashboard's foundation come from that project. This fork's own contribution is the Hyperliquid copy-trading engine, the Telegram alerting and control surface, Bitget UTA v3 support, and the operational fixes documented in this repository's commit history.
+
+Upstream's own documentation still applies to the shared core and is worth reading alongside this file: [Getting Started](docs/getting-started/README.md), [Architecture](docs/architecture/README.md), [Strategy Module](docs/architecture/STRATEGY_MODULE.md), [FAQ](docs/guides/faq.en.md), [Troubleshooting](docs/guides/TROUBLESHOOTING.md).
+
+<sub>Automated trading involves substantial risk. AI-driven strategies are experimental and can lose money. Size positions appropriately, understand each venue, and never trade funds you cannot afford to lose. Full [disclaimer](DISCLAIMER.md).</sub>

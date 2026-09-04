@@ -41,7 +41,7 @@ export interface FlowMarketsResponse {
   }
 }
 
-// Vergex signal ranking item (GET /api/vergex/signal-ranking).
+// Normalized Vergex direction-change leaderboard item.
 export interface SignalRankItem {
   rank: number
   symbol: string
@@ -86,7 +86,75 @@ export interface VergexSignalItem {
 
 export interface VergexSignalRankingResponse {
   items: VergexSignalItem[]
-  raw?: unknown
+}
+
+export interface VergexDirectionLeaderboardItem {
+  market?: { marketType?: string; marketId?: string; symbol?: string }
+  symbol: string
+  bias: string
+  directionScore: number
+  bullishCount: number
+  bearishCount: number
+  neutralCount: number
+  factorDirections?: Record<string, string>
+  markPrice: number
+  rank: number
+  oiRank: number
+  factorAsOf?: number
+}
+
+export interface VergexDirectionLeaderboardResponse {
+  band: number
+  universeSize: number
+  rankBy: string
+  asOf: number
+  items: VergexDirectionLeaderboardItem[]
+}
+
+export interface VergexDirectionCurrentResponse {
+  source?: string
+  symbol: string
+  direction: string
+  new_bias?: string
+  stable_since_at?: number
+  effective_at?: number
+  confirmed_at?: number
+  mark_price?: number
+  reason?: Record<string, string>
+  factor_as_of?: number
+  latest_reversal?: VergexDirectionHistoryItem | null
+  readiness?: {
+    generation?: number
+    cutoff_at?: number
+    watermark_at?: number
+    symbol_count?: number
+  }
+}
+
+export interface VergexDirectionHistoryItem {
+  symbol: string
+  prev_bias?: string
+  new_bias?: string
+  mark_price?: number
+  occurred_at?: number
+  effective_at?: number
+  is_reversal?: boolean
+  confirmed_at?: number
+  reason?: Record<string, string>
+  prev_reason?: Record<string, string> | null
+  next_mark_price?: number | null
+  next_occurred_at?: number | null
+  next_effective_at?: number | null
+}
+
+export interface VergexDirectionHistoryResponse {
+  items: VergexDirectionHistoryItem[]
+  pagination?: {
+    current_page: number
+    page_size: number
+    total_pages: number
+    total_items: number
+  }
 }
 
 export interface VergexDetailRequest {
@@ -94,72 +162,6 @@ export interface VergexDetailRequest {
   symbol: string
   chain?: string
   liqBand?: string
-}
-
-export interface VergexSignalDimension {
-  key?: string
-  family?: string
-  label?: string
-  what?: string
-  kind?: string
-  direction?: string
-  strength?: string
-  percentile?: number
-  detail?: string
-}
-
-export interface VergexSignalLevels {
-  markPrice?: number
-  poc?: number
-  pocDistPct?: number
-  magnet?: number
-  magnetDistPct?: number
-  resistance?: number
-  resistanceDistPct?: number
-  support?: number
-  supportDistPct?: number
-  valueAreaHigh?: number
-  valueAreaLow?: number
-}
-
-export interface VergexSignalMetrics {
-  shortLiqAbove?: number
-  longLiqBelow?: number
-  longOverhangPnl?: number
-  shortOverhangPnl?: number
-  gLong?: number
-  gShort?: number
-  cascadeVulnPct?: number
-  top10Pct?: number
-  convexity?: number
-  includedPositions?: number
-  state?: string
-}
-
-export interface VergexSignalLabData {
-  market?: {
-    chain?: string
-    marketType?: string
-    marketId?: string
-    symbol?: string
-    displayName?: string
-    isActive?: boolean
-  }
-  band?: string
-  bias?: string
-  structureRead?: string
-  confidence?: string
-  dimensions?: VergexSignalDimension[]
-  levels?: VergexSignalLevels
-  metrics?: VergexSignalMetrics
-  compositeZ?: number
-  rank?: number
-  universeSize?: number
-}
-
-export interface VergexSignalLabResponse {
-  data?: VergexSignalLabData
-  meta?: unknown
 }
 
 export interface VergexHeatmapBin {
@@ -224,28 +226,57 @@ export const dataApi = {
     return result.data || { exchange, symbols: [], count: 0 }
   },
 
-  async getVergexSignalRanking(
+  async getVergexDirectionChangeLeaderboard(
     limit = 30
   ): Promise<VergexSignalRankingResponse> {
-    const result = await httpClient.get<VergexSignalRankingResponse>(
-      `${API_BASE}/vergex/signal-ranking?marketType=all&limit=${limit}`
+    const result = await httpClient.get<VergexDirectionLeaderboardResponse>(
+      `${API_BASE}/vergex/direction-change/leaderboard`
     )
     if (!result.success)
-      throw new Error('Failed to fetch Claw402/Vergex signal ranking')
-    return result.data || { items: [] }
+      throw new Error('Failed to fetch Claw402/Vergex direction leaderboard')
+    const items = (result.data?.items || []).slice(0, limit).map((item) => ({
+      rank: item.rank,
+      symbol: item.symbol,
+      market_type: item.market?.marketType,
+      bias: item.bias,
+      score: item.directionScore,
+      category: item.market?.marketType === 'core_perp' ? 'crypto' : undefined,
+    }))
+    return { items }
   },
 
-  async getVergexSignalLab(
-    params: VergexDetailRequest,
-    traderId?: string
-  ): Promise<VergexSignalLabResponse> {
-    const result = await httpClient.request<VergexSignalLabResponse>(
-      `${API_BASE}/vergex/signal-lab?${vergexDetailQuery(params, traderId)}`,
+  async getVergexDirectionChangeCurrent(
+    symbol: string
+  ): Promise<VergexDirectionCurrentResponse> {
+    const query = new URLSearchParams({ symbol })
+    const result = await httpClient.request<VergexDirectionCurrentResponse>(
+      `${API_BASE}/vergex/direction-change/current?${query}`,
       { timeout: 90000 }
     )
     if (!result.success)
-      throw new Error(result.message || 'Failed to fetch Signal Lab')
-    return result.data || {}
+      throw new Error(result.message || 'Failed to fetch current direction')
+    return result.data!
+  },
+
+  async getVergexDirectionChangeHistory(
+    symbol: string,
+    type: 'all' | 'reversal' | 'non_reversal' = 'all',
+    page = 1,
+    pageSize = 20
+  ): Promise<VergexDirectionHistoryResponse> {
+    const query = new URLSearchParams({
+      symbol,
+      type,
+      page: String(page),
+      page_size: String(pageSize),
+    })
+    const result = await httpClient.request<VergexDirectionHistoryResponse>(
+      `${API_BASE}/vergex/direction-change/history?${query}`,
+      { timeout: 90000 }
+    )
+    if (!result.success)
+      throw new Error(result.message || 'Failed to fetch direction history')
+    return result.data || { items: [] }
   },
 
   async getVergexCostLiquidationHeatmap(
@@ -382,23 +413,28 @@ export const dataApi = {
     return result.data!
   },
 
-  async getSignalRanking(
-    aiModelId?: string,
-    chain = 'mainnet',
-    marketType = 'all',
+  async getDirectionChangeLeaderboard(
     limit = 25,
     silent?: boolean,
     traderId?: string
   ): Promise<SignalRankingResponse> {
-    const params = new URLSearchParams({ chain, marketType, limit: String(limit) })
-    if (aiModelId) params.set('ai_model_id', aiModelId)
-    if (traderId) params.set('trader_id', traderId)
-    const result = await httpClient.request<SignalRankingResponse>(
-      `${API_BASE}/vergex/signal-ranking?${params}`,
+    const result = await httpClient.request<VergexDirectionLeaderboardResponse>(
+      `${API_BASE}/vergex/direction-change/leaderboard`,
       { silent }
     )
-    if (!result.success) throw new Error('Failed to fetch signal ranking')
-    return result.data!
+    if (!result.success)
+      throw new Error('Failed to fetch direction leaderboard')
+    return {
+      items: (result.data?.items || []).slice(0, limit).map((item) => ({
+        rank: item.rank,
+        symbol: item.symbol,
+        market_type: item.market?.marketType || '',
+        bias: item.bias,
+        score: item.directionScore,
+        category:
+          item.market?.marketType === 'core_perp' ? 'crypto' : undefined,
+      })),
+    }
   },
 
   async getEquityHistory(traderId?: string, silent?: boolean): Promise<any[]> {

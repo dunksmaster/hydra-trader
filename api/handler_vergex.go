@@ -10,45 +10,61 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (s *Server) handleVergexSignalRanking(c *gin.Context) {
+func (s *Server) handleVergexDirectionChangeLeaderboard(c *gin.Context) {
 	client, ok := s.newVergexClientForRequest(c)
 	if !ok {
 		return
 	}
 	ctx := s.chargeContextForTrader(c, "vergex-ranking")
-	data, err := client.GetSignalRanking(ctx, vergex.Query{
-		Chain:   strings.TrimSpace(c.Query("chain")),
-		LiqBand: strings.TrimSpace(c.Query("liqBand")),
-	})
+	data, err := client.GetDirectionChangeLeaderboard(ctx)
 	if err != nil {
-		logger.Warnf("Vergex signal-ranking failed: %v", err)
+		logger.Warnf("Vergex direction-change leaderboard failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-
-	limit := parsePositiveInt(c.Query("limit"), vergex.MaxSignalRankingItems)
-	marketType := strings.TrimSpace(c.Query("marketType"))
-	items := vergex.FilterSignalRankingItems(data.Items, marketType, limit)
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"raw":   data.Raw,
-	})
+	c.Data(http.StatusOK, "application/json; charset=utf-8", data.Raw)
 }
 
-func (s *Server) handleVergexSignalLab(c *gin.Context) {
+func (s *Server) handleVergexDirectionChangeCurrent(c *gin.Context) {
 	client, ok := s.newVergexClientForRequest(c)
 	if !ok {
 		return
 	}
+	symbol := strings.TrimSpace(c.Query("symbol"))
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
 	ctx := s.chargeContextForTrader(c, "vergex-signal-lab")
-	body, err := client.GetSignalLab(ctx, vergex.Query{
-		MarketType: withDefault(strings.TrimSpace(c.Query("marketType")), vergex.DefaultMarketType),
-		Symbol:     strings.TrimSpace(c.Query("symbol")),
-		Chain:      strings.TrimSpace(c.Query("chain")),
-		LiqBand:    strings.TrimSpace(c.Query("liqBand")),
-	})
+	body, err := client.GetDirectionChangeCurrent(ctx, symbol)
 	if err != nil {
-		logger.Warnf("Vergex signal-lab failed: %v", err)
+		logger.Warnf("Vergex direction-change current failed: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+}
+
+func (s *Server) handleVergexDirectionChangeHistory(c *gin.Context) {
+	client, ok := s.newVergexClientForRequest(c)
+	if !ok {
+		return
+	}
+	symbol := strings.TrimSpace(c.Query("symbol"))
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
+		return
+	}
+	body, err := client.GetDirectionChangeHistory(
+		c.Request.Context(), symbol, strings.TrimSpace(c.Query("type")),
+		parsePositiveInt(c.Query("page"), 1), parsePositiveInt(c.Query("page_size"), 20),
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "type must be") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		logger.Warnf("Vergex direction-change history failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}

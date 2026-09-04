@@ -17,6 +17,10 @@ const (
 	// closes if the position gives back 40% of its peak profit.
 	drawdownClosePriceGainPct = 5.0
 	drawdownCloseGivebackPct  = 40.0
+	// Keep total planned margin below 100% so every configured slot retains
+	// room for exchange overhead and fees. This is an allocation target, not
+	// the per-position hard cap in RiskControlConfig.
+	autopilotBookMarginBudget = 0.96
 )
 
 // shouldDrawdownClose reports whether the profit-protection close should fire.
@@ -253,6 +257,10 @@ func (at *AutoTrader) enforcePositionValueRatio(positionSizeUSD float64, equity 
 			maxPositionValueRatio = 1.0 // Default: 1x for altcoins
 		}
 	}
+	if at.config.StrategyConfig.CoinSource.SourceType == "vergex_signal" &&
+		maxPositionValueRatio > store.AutopilotMaxPositionValueRatio {
+		maxPositionValueRatio = store.AutopilotMaxPositionValueRatio
+	}
 
 	// Calculate max allowed position value = equity × ratio
 	maxPositionValue := equity * maxPositionValueRatio
@@ -296,6 +304,21 @@ func (at *AutoTrader) applyAutopilotFullSizeOpen(decision *kernel.Decision, equi
 	}
 	if positionValueRatio <= 0 {
 		positionValueRatio = 1.0
+	}
+	if positionValueRatio > store.AutopilotMaxPositionValueRatio {
+		positionValueRatio = store.AutopilotMaxPositionValueRatio
+	}
+	maxPositions := riskControl.MaxPositions
+	if maxPositions <= 0 {
+		maxPositions = 1
+	}
+	marginUsage := riskControl.MaxMarginUsage
+	if marginUsage <= 0 || marginUsage > 1 {
+		marginUsage = 1
+	}
+	allocatedRatio := float64(leverage) * marginUsage * autopilotBookMarginBudget / float64(maxPositions)
+	if allocatedRatio < positionValueRatio {
+		positionValueRatio = allocatedRatio
 	}
 
 	fullPositionSize := equity * positionValueRatio

@@ -212,8 +212,9 @@ func (s *Server) setupRoutes() {
 			s.route(protected, "POST", "/wallet/validate", "Validate claw402 wallet private key", s.handleWalletValidate)
 			s.route(protected, "POST", "/wallet/generate", "Generate a new claw402 wallet keypair", s.handleWalletGenerate)
 
-			s.route(protected, "GET", "/vergex/signal-ranking", "Vergex signal ranking via claw402 (?marketType=all&limit=30)", s.handleVergexSignalRanking)
-			s.route(protected, "GET", "/vergex/signal-lab", "Vergex signal lab via claw402 (?marketType=hip3_perp&symbol=AAPL)", s.handleVergexSignalLab)
+			s.route(protected, "GET", "/vergex/direction-change/leaderboard", "Vergex OI Top 30 bull/bear direction leaderboard via claw402", s.handleVergexDirectionChangeLeaderboard)
+			s.route(protected, "GET", "/vergex/direction-change/current", "Vergex current bull/bear direction via claw402 (?symbol=BTC)", s.handleVergexDirectionChangeCurrent)
+			s.route(protected, "GET", "/vergex/direction-change/history", "Vergex bull/bear direction history via claw402 (?symbol=BTC&type=all&page=1&page_size=20)", s.handleVergexDirectionChangeHistory)
 			s.route(protected, "GET", "/vergex/cost-liquidation-heatmap", "Vergex cost/liquidation heatmap via claw402 (?marketType=hip3_perp&symbol=AAPL)", s.handleVergexCostLiquidationHeatmap)
 			s.route(protected, "GET", "/vergex/flow-markets", "Vergex net-flow market ranking via claw402 (?chain=mainnet&window=1h&limit=25)", s.handleVergexFlowMarkets)
 
@@ -350,7 +351,7 @@ CRITICAL: Always use the "id" field for strategy_id.`,
 IMPORTANT: For most use cases just POST {"name":"<name>"} — the backend fills everything in. Only include "config" when the user explicitly requests custom settings (specific coins, custom leverage, custom timeframes).
 
 StrategyConfig fields:
-  coin_source.source_type: "vergex_signal" (Claw402/Vergex signal-ranking; default and recommended)
+  coin_source.source_type: "vergex_signal" (Claw402/Vergex direction board; default and recommended)
   coin_source.vergex_limit: number of Claw402 candidates enriched with detail data (default 10, max 10)
   coin_source.vergex_market_type: "all" for the full Claw402 board; detail calls use each ranking item's market_type
   coin_source.vergex_chain: "hyperliquid"

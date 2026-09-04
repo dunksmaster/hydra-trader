@@ -138,29 +138,14 @@ func TestTradeThrottleBlocksQuickReentryAfterClose(t *testing.T) {
 	}
 }
 
-func TestTradeThrottleAllowsLongShortPairInCycle(t *testing.T) {
+func TestTradeThrottleDoesNotCapOpensPerCycle(t *testing.T) {
 	at := &AutoTrader{}
 	ctx := &kernel.Context{}
 
-	// One open already queued this cycle (e.g. the long) — the second open
-	// (the short) must still be allowed so a directional pair can open.
-	reason := at.tradeThrottleReason(kernel.Decision{Symbol: "xyz:INTC", Action: "open_short"}, ctx, 1)
-	if reason != "" {
-		t.Fatalf("expected the second (short) open in cycle to be allowed, got %q", reason)
-	}
-}
-
-func TestTradeThrottleBlocksOpensOverCycleCap(t *testing.T) {
-	at := &AutoTrader{}
-	ctx := &kernel.Context{}
-
-	// under the 2-per-cycle cap, a further open is allowed
-	if reason := at.tradeThrottleReason(kernel.Decision{Symbol: "xyz:INTC", Action: "open_long"}, ctx, 1); reason != "" {
-		t.Fatalf("expected open within the 2-per-cycle cap to be allowed, got %q", reason)
-	}
-	// at the cap, the next open is blocked
-	if reason := at.tradeThrottleReason(kernel.Decision{Symbol: "xyz:INTC", Action: "open_long"}, ctx, 2); !strings.Contains(reason, "2 new position") {
-		t.Fatalf("expected open beyond the 2-per-cycle cap to be blocked, got %q", reason)
+	for _, symbol := range []string{"xyz:INTC", "xyz:NVDA", "xyz:SNDK", "xyz:MU", "xyz:SP500"} {
+		if reason := at.tradeThrottleReason(kernel.Decision{Symbol: symbol, Action: "open_long"}, ctx, 0); reason != "" {
+			t.Fatalf("expected %s open to have no per-cycle count cap, got %q", symbol, reason)
+		}
 	}
 }
 

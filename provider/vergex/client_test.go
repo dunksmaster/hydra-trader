@@ -1,220 +1,180 @@
 package vergex
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
-func TestParseSignalRankingAndFilterTradFiItems(t *testing.T) {
+func TestParseDirectionChangeLeaderboard(t *testing.T) {
 	body := []byte(`{
-		"data": {
-			"rankings": [
-				{"marketType":"hip3-perp","symbol":"AAPL","bias":"long","confidence":0.88,"compositeZ":1.75},
-				{"marketType":"stock","symbol":"NVDA","bias":"long","confidence":0.81,"compositeZ":1.25},
-				{"market_type":"core_perp","symbol":"BTC","bias":"short","score":0.91}
-			]
-		}
+		"band":15,"universeSize":30,"rankBy":"directionScore","asOf":1786781428957,
+		"items":[
+			{"market":{"marketType":"hip3_perp","symbol":"xyz:NVDA"},"symbol":"xyz:NVDA","bias":"bullish","directionScore":4,"bullishCount":4,"bearishCount":0,"neutralCount":1,"markPrice":224.5,"rank":1,"oiRank":14},
+			{"market":{"marketType":"core_perp","symbol":"BTC"},"symbol":"BTC","bias":"bearish","directionScore":-4,"bullishCount":0,"bearishCount":4,"neutralCount":1,"markPrice":63047,"rank":2,"oiRank":1}
+		]
 	}`)
 
-	ranking, err := ParseSignalRanking(body)
+	board, err := ParseDirectionChangeLeaderboard(body)
 	if err != nil {
-		t.Fatalf("ParseSignalRanking returned error: %v", err)
+		t.Fatal(err)
 	}
-	if len(ranking.Items) != 3 {
-		t.Fatalf("items len = %d, want 3", len(ranking.Items))
+	if board.Band != 15 || board.UniverseSize != 30 || board.RankBy != "directionScore" || len(board.Items) != 2 {
+		t.Fatalf("unexpected board metadata/items: %+v", board)
 	}
-	if ranking.Items[0].Symbol != "AAPL" || ranking.Items[0].MarketType != "hip3-perp" || ranking.Items[0].Bias != "long" {
-		t.Fatalf("unexpected first item: %+v", ranking.Items[0])
+	nvda := board.Items[0]
+	if nvda.Symbol != "NVDA" || nvda.APISymbol != "xyz:NVDA" || nvda.MarketType != "hip3_perp" || nvda.Score != 4 || nvda.BullishCount != 4 || nvda.MarkPrice != 224.5 || nvda.OIRank != 14 {
+		t.Fatalf("unexpected parsed NVDA item: %+v", nvda)
 	}
-
-	items := FilterTradFiItems(ranking.Items, "hip3_perp", 5)
-	if len(items) != 2 {
-		t.Fatalf("filtered len = %d, want 2", len(items))
-	}
-	if got := TradableSymbol(items[0].Symbol); got != "xyz:AAPL" {
-		t.Fatalf("TradableSymbol = %q, want xyz:AAPL", got)
-	}
-	if got := TradableSymbol(items[1].Symbol); got != "xyz:NVDA" {
-		t.Fatalf("TradableSymbol = %q, want xyz:NVDA", got)
+	filtered := FilterDirectionChangeItems(board.Items, "all", 30)
+	if len(filtered) != 2 || filtered[0].Category != "stock" || filtered[1].Category != "crypto" {
+		t.Fatalf("unexpected filtered items: %+v", filtered)
 	}
 }
 
-func TestFilterTradFiItemsAllowsFullClaw402Board(t *testing.T) {
-	items := make([]SignalRankItem, 0, 35)
-	for i := 1; i <= 35; i++ {
-		items = append(items, SignalRankItem{
-			Rank:       i,
-			Symbol:     fmt.Sprintf("xyz:STK%02d", i),
-			MarketType: "hip3_perp",
-			Bias:       "bullish",
-		})
+func TestDirectionChangeRequestsUseExactPathsAndParams(t *testing.T) {
+	type seenRequest struct {
+		path  string
+		query url.Values
 	}
-
-	filtered := FilterTradFiItems(items, "hip3_perp", 30)
-	if len(filtered) != 30 {
-		t.Fatalf("filtered len = %d, want 30", len(filtered))
-	}
-	if filtered[0].Symbol != "STK01" || filtered[29].Symbol != "STK30" {
-		t.Fatalf("unexpected filtered bounds: first=%q last=%q", filtered[0].Symbol, filtered[29].Symbol)
-	}
-
-	capped := FilterTradFiItems(items, "hip3_perp", 35)
-	if len(capped) != MaxSignalRankingItems {
-		t.Fatalf("capped len = %d, want %d", len(capped), MaxSignalRankingItems)
-	}
-}
-
-func TestParseSignalRankingReadsNestedMarketShape(t *testing.T) {
-	body := []byte(`{
-		"data": {
-			"items": [
-				{"market":{"marketType":"hip3_perp","symbol":"xyz:NBIS"},"symbol":"xyz:NBIS","bias":"bullish","compositeZ":1.05,"rank":5},
-				{"market":{"marketType":"hip3_perp","symbol":"xyz:DRAM"},"symbol":"xyz:DRAM","bias":"bullish","compositeZ":0.47,"rank":10},
-				{"market":{"marketType":"core_perp","symbol":"BTC"},"symbol":"BTC","bias":"bearish","compositeZ":-0.08,"rank":12}
-			]
+	var mu sync.Mutex
+	var seen []seenRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, seenRequest{path: r.URL.Path, query: r.URL.Query()})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case DirectionLeaderboardPath:
+			fmt.Fprint(w, `{"band":15,"universeSize":0,"rankBy":"directionScore","asOf":1,"items":[]}`)
+		case DirectionCurrentPath:
+			fmt.Fprint(w, `{"symbol":"BTC","direction":"bearish"}`)
+		case DirectionHistoryPath:
+			fmt.Fprint(w, `{"items":[],"pagination":{"current_page":2,"page_size":100,"total_pages":0,"total_items":0}}`)
+		default:
+			http.NotFound(w, r)
 		}
-	}`)
+	}))
+	defer server.Close()
 
-	ranking, err := ParseSignalRanking(body)
+	client := testClient(t, server.URL)
+	if _, err := client.GetDirectionChangeLeaderboard(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetDirectionChangeCurrent(context.Background(), " BTC "); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetDirectionChangeHistory(context.Background(), "BTC", "reversal", 2, 500); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("requests=%d, want 3", len(seen))
+	}
+	if seen[0].path != DirectionLeaderboardPath || len(seen[0].query) != 0 {
+		t.Fatalf("leaderboard request=%+v", seen[0])
+	}
+	if seen[1].path != DirectionCurrentPath || seen[1].query.Get("symbol") != "BTC" || len(seen[1].query) != 1 {
+		t.Fatalf("current request=%+v", seen[1])
+	}
+	q := seen[2].query
+	if seen[2].path != DirectionHistoryPath || q.Get("symbol") != "BTC" || q.Get("type") != "reversal" || q.Get("page") != "2" || q.Get("page_size") != "100" || len(q) != 4 {
+		t.Fatalf("history request=%+v", seen[2])
+	}
+}
+
+func TestDirectionChangeValidationAndHistoryDefaults(t *testing.T) {
+	client := testClient(t, "http://127.0.0.1:1")
+	if _, err := client.GetDirectionChangeCurrent(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "symbol is required") {
+		t.Fatalf("current validation err=%v", err)
+	}
+	if _, err := client.GetDirectionChangeHistory(context.Background(), "BTC", "bad", 1, 20); err == nil || !strings.Contains(err.Error(), "type must be") {
+		t.Fatalf("history type err=%v", err)
+	}
+}
+
+func TestDirectionChangeLiveIntegration(t *testing.T) {
+	if os.Getenv("VERGEX_INTEGRATION") != "1" {
+		t.Skip("set VERGEX_INTEGRATION=1 to run paid claw402 integration")
+	}
+	client, err := NewClient("", os.Getenv("CLAW402_WALLET_KEY"), nil)
 	if err != nil {
-		t.Fatalf("ParseSignalRanking returned error: %v", err)
+		t.Fatal(err)
 	}
-	allItems := FilterSignalRankingItems(ranking.Items, "all", 30)
-	if len(allItems) != 3 {
-		t.Fatalf("all filtered len = %d, want 3: %+v", len(allItems), allItems)
+	ctx := context.Background()
+	board, err := client.GetDirectionChangeLeaderboard(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if allItems[2].Symbol != "BTC" || allItems[2].MarketType != "core_perp" || allItems[2].Category != "crypto" {
-		t.Fatalf("unexpected crypto item: %+v", allItems[2])
+	if board.Band <= 0 || board.UniverseSize <= 0 || len(board.Items) == 0 || len(board.Items) > MaxDirectionChangeItems {
+		t.Fatalf("invalid live leaderboard metadata: band=%d universe=%d items=%d", board.Band, board.UniverseSize, len(board.Items))
 	}
-	items := FilterTradFiItems(ranking.Items, "hip3_perp", 30)
-	if len(items) != 2 {
-		t.Fatalf("filtered len = %d, want 2: %+v", len(items), items)
+	symbol := board.Items[0].APISymbol
+	currentRaw, err := client.GetDirectionChangeCurrent(ctx, symbol)
+	if err != nil {
+		t.Fatalf("current(%s): %v", symbol, err)
 	}
-	if items[0].Symbol != "NBIS" || items[0].MarketType != "hip3_perp" {
-		t.Fatalf("unexpected first item: %+v", items[0])
+	var current struct {
+		Symbol    string `json:"symbol"`
+		Direction string `json:"direction"`
 	}
-	if items[1].Symbol != "DRAM" || items[1].MarketType != "hip3_perp" {
-		t.Fatalf("unexpected second item: %+v", items[1])
+	if err := json.Unmarshal(currentRaw, &current); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestMarketSymbolPreservesHIP3XYZPrefix(t *testing.T) {
-	if got := MarketSymbol("hip3_perp", "INTC"); got != "xyz:INTC" {
-		t.Fatalf("MarketSymbol hip3_perp/INTC = %q, want xyz:INTC", got)
+	if current.Symbol == "" || current.Direction == "" {
+		t.Fatalf("invalid current response: %s", currentRaw)
 	}
-	if got := MarketSymbol("hip3_perp", "xyz:skhx"); got != "xyz:SKHX" {
-		t.Fatalf("MarketSymbol hip3_perp/xyz:skhx = %q, want xyz:SKHX", got)
+	historyRaw, err := client.GetDirectionChangeHistory(ctx, symbol, "all", 1, 2)
+	if err != nil {
+		t.Fatalf("history(%s): %v", symbol, err)
 	}
-	if got := MarketSymbol("core_perp", "BTC"); got != "BTC" {
-		t.Fatalf("MarketSymbol core_perp/BTC = %q, want BTC", got)
+	var history struct {
+		Items      []json.RawMessage `json:"items"`
+		Pagination struct {
+			CurrentPage int `json:"current_page"`
+			PageSize    int `json:"page_size"`
+		} `json:"pagination"`
 	}
-	if got := TradableSymbolForMarket("core_perp", "BTC"); got != "BTC" {
-		t.Fatalf("TradableSymbolForMarket core_perp/BTC = %q, want BTC", got)
+	if err := json.Unmarshal(historyRaw, &history); err != nil {
+		t.Fatal(err)
 	}
-	if got := TradableSymbolForMarket("hip3_perp", "INTC"); got != "xyz:INTC" {
-		t.Fatalf("TradableSymbolForMarket hip3_perp/INTC = %q, want xyz:INTC", got)
-	}
-}
-
-func TestAddQueryDefaultsUsesClaw402GatewayParams(t *testing.T) {
-	params := url.Values{}
-	addQueryDefaults(params, Query{
-		MarketType: "hip3_perp",
-		Symbol:     "INTC",
-		Chain:      "hyperliquid",
-		LiqBand:    "15",
-	}, true)
-
-	if got := params.Get("marketType"); got != "hip3_perp" {
-		t.Fatalf("marketType = %q", got)
-	}
-	if got := params.Get("symbol"); got != "xyz:INTC" {
-		t.Fatalf("symbol = %q, want xyz:INTC", got)
-	}
-	if got := params.Get("chain"); got != "mainnet" {
-		t.Fatalf("chain = %q, want mainnet", got)
-	}
-	if got := params.Get("liqBand"); got != "15" {
-		t.Fatalf("liqBand = %q, want 15", got)
+	if history.Pagination.CurrentPage != 1 || history.Pagination.PageSize != 2 {
+		t.Fatalf("invalid history pagination: %s", historyRaw)
 	}
 }
 
-func TestQueryChainMapsHyperliquidToVergexMainnet(t *testing.T) {
-	if got := QueryChain("hyperliquid"); got != "mainnet" {
-		t.Fatalf("QueryChain hyperliquid = %q, want mainnet", got)
-	}
-}
-
-func TestFormatAnalysisForAIIncludesDetailErrors(t *testing.T) {
+func TestFormatAnalysisForAIUsesDirectionChangeData(t *testing.T) {
 	text := FormatAnalysisForAI(&MarketAnalysis{
-		Symbol:         "xyz:NVDA",
-		QuerySymbol:    "NVDA",
-		MarketType:     "stock",
-		SignalLabError: "upstream returned status 502",
-		HeatmapError:   "market not found",
+		Symbol: "BTC", QuerySymbol: "BTC", MarketType: "core_perp",
+		Ranking:          &DirectionChangeItem{Rank: 25, Bias: "bearish", Score: -4, BearishCount: 4, NeutralCount: 1, OIRank: 1, MarkPrice: 63047, Category: "crypto"},
+		DirectionCurrent: json.RawMessage(`{"symbol":"BTC","direction":"bearish"}`),
+		DirectionHistory: json.RawMessage(`{"items":[{"prev_bias":"bullish","new_bias":"bearish"}]}`),
 	})
-
-	if !containsAll(text, "Signal Lab: unavailable", "upstream returned status 502", "Cost/Liquidation Heatmap: unavailable", "market not found") {
-		t.Fatalf("formatted analysis did not include detail errors:\n%s", text)
-	}
-}
-
-func TestFormatAnalysisForAIFormatsVergexDetailsAsMarkdown(t *testing.T) {
-	text := FormatAnalysisForAI(&MarketAnalysis{
-		Symbol:      "xyz:DRAM",
-		QuerySymbol: "DRAM",
-		MarketType:  "hip3_perp",
-		SignalLab: []byte(`{
-			"data": {
-				"band": "15",
-				"bias": "bullish",
-				"compositeZ": 1.41,
-				"confidence": "Medium",
-				"dimensions": [
-					{
-						"family": "I Cost & Positioning",
-						"label": "Capital-gains overhang",
-						"direction": "bullish",
-						"strength": "medium",
-						"percentile": 80,
-						"detail": "price is above aggregate cost"
-					}
-				]
-			}
-		}`),
-		Heatmap: []byte(`{
-			"data": {
-				"binStep": 3.2,
-				"bins": [
-					{"bucketStartPrice": 100, "bucketEndPrice": 103.2, "longCost": 1200000, "shortCost": 1000, "longLiq": 5000, "shortLiq": 700000},
-					{"bucketStartPrice": 103.2, "bucketEndPrice": 106.4, "longCost": 1000, "shortCost": 2000, "longLiq": 900000, "shortLiq": 4000}
-				]
-			}
-		}`),
-	})
-
-	if !containsAll(text,
-		"#### Signal Lab",
-		"| Family | Signal | Direction | Strength | Percentile | Detail |",
-		"Capital-gains overhang",
-		"#### Cost/Liquidation Heatmap",
-		"| Price zone | Long cost | Short cost | Long liq | Short liq | Main cluster |",
-		"$1.20M",
-	) {
-		t.Fatalf("formatted analysis is not markdown enough:\n%s", text)
-	}
-	if strings.Contains(text, "Signal Lab: {") || strings.Contains(text, "Cost/Liquidation Heatmap: {") {
-		t.Fatalf("formatted analysis still includes raw inline JSON:\n%s", text)
-	}
-}
-
-func containsAll(text string, needles ...string) bool {
-	for _, needle := range needles {
-		if !strings.Contains(text, needle) {
-			return false
+	for _, want := range []string{"Direction leaderboard", "direction_score=-4", "Current Bull/Bear Direction", "Bull/Bear Direction History", `"new_bias":"bearish"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
 		}
 	}
-	return true
+	if strings.Contains(text, "Signal Lab") {
+		t.Fatalf("old Signal Lab label remains:\n%s", text)
+	}
+}
+
+func testClient(t *testing.T, baseURL string) *Client {
+	t.Helper()
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Client{baseURL: baseURL, privateKey: (*ecdsa.PrivateKey)(key), httpClient: http.DefaultClient}
 }

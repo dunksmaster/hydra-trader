@@ -30,6 +30,8 @@ export type WalletProvider = {
   isFrame?: boolean
 }
 
+const announcedWalletNames = new WeakMap<WalletProvider, string>()
+
 export function getWalletProviders(): WalletProvider[] {
   const injected = window.ethereum
   if (!injected) return []
@@ -43,6 +45,64 @@ export function getWalletProviders(): WalletProvider[] {
     seen.add(provider)
     return true
   })
+}
+
+export function getWalletProviderName(provider: WalletProvider) {
+  const announcedName = announcedWalletNames.get(provider)
+  if (announcedName) return announcedName
+  if (provider.isRabby) return 'Rabby'
+  if (provider.isMetaMask) return 'MetaMask'
+  if (provider.isOkxWallet) return 'OKX Wallet'
+  if (provider.isCoinbaseWallet) return 'Coinbase Wallet'
+  if (provider.isPhantom) return 'Phantom'
+  if (provider.isBraveWallet) return 'Brave Wallet'
+  if (provider.isBackpack) return 'Backpack'
+  if (provider.isTrust) return 'Trust Wallet'
+  if (provider.isExodus) return 'Exodus'
+  if (provider.isFrame) return 'Frame'
+  return 'Browser wallet'
+}
+
+/**
+ * Discover both legacy injected providers and EIP-6963 wallet providers.
+ * Modern extensions no longer reliably share window.ethereum.providers.
+ */
+export function subscribeWalletProviders(
+  onChange: (providers: WalletProvider[]) => void
+) {
+  const providers = getWalletProviders()
+  const publish = () => onChange([...providers])
+  const handleAnnouncement = (event: Event) => {
+    const detail = (
+      event as CustomEvent<{
+        info?: { name?: unknown }
+        provider?: unknown
+      }>
+    ).detail
+    const provider = detail?.provider
+    if (
+      !provider ||
+      typeof provider !== 'object' ||
+      typeof (provider as WalletProvider).request !== 'function'
+    ) {
+      return
+    }
+
+    const walletProvider = provider as WalletProvider
+    const announcedName = detail?.info?.name
+    if (typeof announcedName === 'string' && announcedName.trim()) {
+      announcedWalletNames.set(walletProvider, announcedName.trim())
+    }
+    if (!providers.includes(walletProvider)) providers.push(walletProvider)
+    publish()
+  }
+
+  window.addEventListener('eip6963:announceProvider', handleAnnouncement)
+  publish()
+  window.dispatchEvent(new Event('eip6963:requestProvider'))
+
+  return () =>
+    window.removeEventListener('eip6963:announceProvider', handleAnnouncement)
 }
 
 export function getPreferredWalletProvider(): WalletProvider | undefined {
@@ -60,6 +120,75 @@ export function getPreferredWalletProvider(): WalletProvider | undefined {
     providers.find((provider) => provider.isFrame) ||
     providers[0]
   )
+}
+
+/**
+ * Prefer the injected provider that already exposes the expected account.
+ * Browsers frequently have several wallet extensions installed, and blindly
+ * preferring one brand can connect a different account than the Hyperliquid
+ * account already saved in NOFX.
+ */
+export async function getWalletProviderForAddress(
+  expectedAddress?: string
+): Promise<WalletProvider | undefined> {
+  const preferred = getPreferredWalletProvider()
+  const expected = normalizeAddress(expectedAddress || '')
+  if (!expected) return preferred
+
+  const providers = getWalletProviders()
+  const ordered = preferred
+    ? [preferred, ...providers.filter((provider) => provider !== preferred)]
+    : providers
+
+  for (const provider of ordered) {
+    try {
+      const accounts = await provider.request({ method: 'eth_accounts' })
+      if (
+        Array.isArray(accounts) &&
+        accounts.some(
+          (account) =>
+            typeof account === 'string' &&
+            normalizeAddress(account) === expected
+        )
+      ) {
+        return provider
+      }
+    } catch {
+      // Ignore providers that are locked or do not implement eth_accounts.
+    }
+  }
+
+  return preferred
+}
+
+export function getWalletErrorMessage(error: unknown, fallback: string) {
+  const queue: unknown[] = [error]
+  const seen = new Set<unknown>()
+
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current || seen.has(current)) continue
+    seen.add(current)
+
+    if (current instanceof Error && current.message.trim()) {
+      return current.message.trim()
+    }
+    if (typeof current !== 'object') continue
+
+    const record = current as Record<string, unknown>
+    for (const key of ['shortMessage', 'message', 'reason']) {
+      const value = record[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+    for (const key of ['data', 'error', 'cause']) {
+      if (record[key]) queue.push(record[key])
+    }
+    if (record.code === 4001 || record.code === 'ACTION_REJECTED') {
+      return 'The wallet request was rejected.'
+    }
+  }
+
+  return fallback
 }
 
 export function normalizeAddress(address: string) {
@@ -159,7 +288,12 @@ export async function signHyperliquidUserAction(
     ...action,
     signatureChainId: chainIdHex,
   }
-  const typedData = buildTypedData(primaryType, fields, signedAction, chainIdHex)
+  const typedData = buildTypedData(
+    primaryType,
+    fields,
+    signedAction,
+    chainIdHex
+  )
   const raw = await provider.request({
     method: 'eth_signTypedData_v4',
     params: [signerAddress, JSON.stringify(typedData)],

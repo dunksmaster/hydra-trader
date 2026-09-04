@@ -23,9 +23,10 @@ const (
 	DefaultBaseURL             = "https://claw402.ai"
 	DefaultChain               = "mainnet"
 	DefaultMarketType          = "hip3_perp"
-	MaxSignalRankingItems      = 30
-	SignalRankingPath          = "/api/v1/vergex/signal-ranking"
-	SignalLabPath              = "/api/v1/vergex/signal-lab"
+	MaxDirectionChangeItems    = 30
+	DirectionLeaderboardPath   = "/api/v1/vergex/direction-change/leaderboard"
+	DirectionCurrentPath       = "/api/v1/vergex/direction-change/current"
+	DirectionHistoryPath       = "/api/v1/vergex/direction-change/history"
 	CostLiquidationHeatmapPath = "/api/v1/vergex/cost-liquidation-heatmap"
 	FlowMarketsPath            = "/api/v1/vergex/flow-markets"
 )
@@ -45,31 +46,42 @@ type Query struct {
 	Category   string
 }
 
-type SignalRankingData struct {
-	Raw   json.RawMessage  `json:"raw"`
-	Items []SignalRankItem `json:"items"`
+type DirectionChangeLeaderboardData struct {
+	Band         int                   `json:"band"`
+	UniverseSize int                   `json:"universeSize"`
+	RankBy       string                `json:"rankBy"`
+	AsOf         int64                 `json:"asOf"`
+	Raw          json.RawMessage       `json:"raw,omitempty"`
+	Items        []DirectionChangeItem `json:"items"`
 }
 
-type SignalRankItem struct {
-	Rank       int             `json:"rank,omitempty"`
-	Symbol     string          `json:"symbol"`
-	MarketType string          `json:"market_type,omitempty"`
-	Bias       string          `json:"bias,omitempty"`
-	Confidence float64         `json:"confidence,omitempty"`
-	Score      float64         `json:"score,omitempty"`
-	Category   string          `json:"category,omitempty"`
-	Raw        json.RawMessage `json:"raw,omitempty"`
+type DirectionChangeItem struct {
+	Rank         int             `json:"rank,omitempty"`
+	Symbol       string          `json:"symbol"`
+	APISymbol    string          `json:"api_symbol,omitempty"`
+	MarketType   string          `json:"market_type,omitempty"`
+	Bias         string          `json:"bias,omitempty"`
+	Score        float64         `json:"score,omitempty"`
+	BullishCount int             `json:"bullish_count,omitempty"`
+	BearishCount int             `json:"bearish_count,omitempty"`
+	NeutralCount int             `json:"neutral_count,omitempty"`
+	OIRank       int             `json:"oi_rank,omitempty"`
+	MarkPrice    float64         `json:"mark_price,omitempty"`
+	Category     string          `json:"category,omitempty"`
+	Raw          json.RawMessage `json:"raw,omitempty"`
 }
 
 type MarketAnalysis struct {
-	Symbol         string          `json:"symbol"`
-	QuerySymbol    string          `json:"query_symbol"`
-	MarketType     string          `json:"market_type"`
-	Ranking        *SignalRankItem `json:"ranking,omitempty"`
-	SignalLab      json.RawMessage `json:"signal_lab,omitempty"`
-	SignalLabError string          `json:"signal_lab_error,omitempty"`
-	Heatmap        json.RawMessage `json:"heatmap,omitempty"`
-	HeatmapError   string          `json:"heatmap_error,omitempty"`
+	Symbol                string               `json:"symbol"`
+	QuerySymbol           string               `json:"query_symbol"`
+	MarketType            string               `json:"market_type"`
+	Ranking               *DirectionChangeItem `json:"ranking,omitempty"`
+	DirectionCurrent      json.RawMessage      `json:"direction_current,omitempty"`
+	DirectionCurrentError string               `json:"direction_current_error,omitempty"`
+	DirectionHistory      json.RawMessage      `json:"direction_history,omitempty"`
+	DirectionHistoryError string               `json:"direction_history_error,omitempty"`
+	Heatmap               json.RawMessage      `json:"heatmap,omitempty"`
+	HeatmapError          string               `json:"heatmap_error,omitempty"`
 }
 
 func NewClient(baseURL, privateKeyHex string, logger mcp.Logger) (*Client, error) {
@@ -101,23 +113,49 @@ func NewClient(baseURL, privateKeyHex string, logger mcp.Logger) (*Client, error
 	}, nil
 }
 
-func (c *Client) GetSignalRanking(ctx context.Context, q Query) (*SignalRankingData, error) {
-	params := url.Values{}
-	addQueryDefaults(params, q, false)
-	body, err := c.doGET(ctx, SignalRankingPath, params)
+func (c *Client) GetDirectionChangeLeaderboard(ctx context.Context) (*DirectionChangeLeaderboardData, error) {
+	body, err := c.doGET(ctx, DirectionLeaderboardPath, nil)
 	if err != nil {
 		return nil, err
 	}
-	return ParseSignalRanking(body)
+	return ParseDirectionChangeLeaderboard(body)
 }
 
-func (c *Client) GetSignalLab(ctx context.Context, q Query) (json.RawMessage, error) {
-	if strings.TrimSpace(q.MarketType) == "" || strings.TrimSpace(q.Symbol) == "" {
-		return nil, fmt.Errorf("marketType and symbol are required")
+func (c *Client) GetDirectionChangeCurrent(ctx context.Context, symbol string) (json.RawMessage, error) {
+	if strings.TrimSpace(symbol) == "" {
+		return nil, fmt.Errorf("symbol is required")
 	}
-	params := url.Values{}
-	addQueryDefaults(params, q, true)
-	return c.doGET(ctx, SignalLabPath, params)
+	params := url.Values{"symbol": {strings.TrimSpace(symbol)}}
+	return c.doGET(ctx, DirectionCurrentPath, params)
+}
+
+func (c *Client) GetDirectionChangeHistory(ctx context.Context, symbol, eventType string, page, pageSize int) (json.RawMessage, error) {
+	if strings.TrimSpace(symbol) == "" {
+		return nil, fmt.Errorf("symbol is required")
+	}
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	if eventType == "" {
+		eventType = "all"
+	}
+	if eventType != "all" && eventType != "reversal" && eventType != "non_reversal" {
+		return nil, fmt.Errorf("type must be all, reversal, or non_reversal")
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	params := url.Values{
+		"symbol":    {strings.TrimSpace(symbol)},
+		"type":      {eventType},
+		"page":      {fmt.Sprintf("%d", page)},
+		"page_size": {fmt.Sprintf("%d", pageSize)},
+	}
+	return c.doGET(ctx, DirectionHistoryPath, params)
 }
 
 func (c *Client) GetCostLiquidationHeatmap(ctx context.Context, q Query) (json.RawMessage, error) {
@@ -199,15 +237,22 @@ func (c *Client) doGET(ctx context.Context, path string, params url.Values) ([]b
 	return body, nil
 }
 
-func ParseSignalRanking(body []byte) (*SignalRankingData, error) {
+func ParseDirectionChangeLeaderboard(body []byte) (*DirectionChangeLeaderboardData, error) {
 	raw := json.RawMessage(append([]byte(nil), body...))
+	var meta struct {
+		Band         int    `json:"band"`
+		UniverseSize int    `json:"universeSize"`
+		RankBy       string `json:"rankBy"`
+		AsOf         int64  `json:"asOf"`
+	}
+	_ = json.Unmarshal(body, &meta)
 	var decoded any
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, fmt.Errorf("failed to parse vergex signal-ranking response: %w", err)
+		return nil, fmt.Errorf("failed to parse vergex direction-change leaderboard response: %w", err)
 	}
 
 	rows := findObjectArray(decoded)
-	items := make([]SignalRankItem, 0, len(rows))
+	items := make([]DirectionChangeItem, 0, len(rows))
 	for idx, row := range rows {
 		obj, ok := row.(map[string]any)
 		if !ok {
@@ -219,32 +264,32 @@ func ParseSignalRanking(body []byte) (*SignalRankingData, error) {
 		}
 	}
 
-	return &SignalRankingData{Raw: raw, Items: items}, nil
+	return &DirectionChangeLeaderboardData{Band: meta.Band, UniverseSize: meta.UniverseSize, RankBy: meta.RankBy, AsOf: meta.AsOf, Raw: raw, Items: items}, nil
 }
 
-func FilterTradFiItems(items []SignalRankItem, marketType string, limit int) []SignalRankItem {
+func FilterTradFiItems(items []DirectionChangeItem, marketType string, limit int) []DirectionChangeItem {
 	if marketType == "" {
 		marketType = DefaultMarketType
 	}
 	return filterSignalRankingItems(items, marketType, limit, false)
 }
 
-func FilterSignalRankingItems(items []SignalRankItem, marketType string, limit int) []SignalRankItem {
+func FilterDirectionChangeItems(items []DirectionChangeItem, marketType string, limit int) []DirectionChangeItem {
 	return filterSignalRankingItems(items, marketType, limit, true)
 }
 
-func filterSignalRankingItems(items []SignalRankItem, marketType string, limit int, allowAll bool) []SignalRankItem {
+func filterSignalRankingItems(items []DirectionChangeItem, marketType string, limit int, allowAll bool) []DirectionChangeItem {
 	requestedMarketType := marketType
 	normalizedMarketType := normalizeMarketType(marketType)
 	includeAll := allowAll && isAllMarketType(marketType)
 	if limit <= 0 {
 		limit = 5
 	}
-	if limit > MaxSignalRankingItems {
-		limit = MaxSignalRankingItems
+	if limit > MaxDirectionChangeItems {
+		limit = MaxDirectionChangeItems
 	}
 
-	out := make([]SignalRankItem, 0, limit)
+	out := make([]DirectionChangeItem, 0, limit)
 	seen := make(map[string]bool)
 	for _, item := range items {
 		base := QuerySymbol(item.Symbol)
@@ -348,20 +393,33 @@ func FormatAnalysisForAI(analysis *MarketAnalysis) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("### %s (Vergex %s/%s)\n", analysis.Symbol, analysis.MarketType, analysis.QuerySymbol))
 	if analysis.Ranking != nil {
-		sb.WriteString(fmt.Sprintf("Ranking: rank=%d bias=%s confidence=%.2f score=%.4f category=%s\n",
+		sb.WriteString(fmt.Sprintf("Direction leaderboard: rank=%d bias=%s direction_score=%.0f bulls=%d bears=%d neutral=%d oi_rank=%d mark_price=%s category=%s\n",
 			analysis.Ranking.Rank,
 			emptyDash(analysis.Ranking.Bias),
-			analysis.Ranking.Confidence,
 			analysis.Ranking.Score,
+			analysis.Ranking.BullishCount,
+			analysis.Ranking.BearishCount,
+			analysis.Ranking.NeutralCount,
+			analysis.Ranking.OIRank,
+			trimFloat(analysis.Ranking.MarkPrice, 6),
 			emptyDash(analysis.Ranking.Category)))
 	}
-	if len(analysis.SignalLab) > 0 {
-		sb.WriteString("#### Signal Lab\n")
-		sb.WriteString(FormatSignalLabMarkdown(analysis.SignalLab))
+	if len(analysis.DirectionCurrent) > 0 {
+		sb.WriteString("#### Current Bull/Bear Direction\n")
+		sb.WriteString(fallbackJSONBlock(analysis.DirectionCurrent, 2200))
 		sb.WriteString("\n")
-	} else if analysis.SignalLabError != "" {
-		sb.WriteString("Signal Lab: unavailable (")
-		sb.WriteString(truncateText(analysis.SignalLabError, 360))
+	} else if analysis.DirectionCurrentError != "" {
+		sb.WriteString("Current direction: unavailable (")
+		sb.WriteString(truncateText(analysis.DirectionCurrentError, 360))
+		sb.WriteString(")\n")
+	}
+	if len(analysis.DirectionHistory) > 0 {
+		sb.WriteString("#### Bull/Bear Direction History\n")
+		sb.WriteString(fallbackJSONBlock(analysis.DirectionHistory, 2600))
+		sb.WriteString("\n")
+	} else if analysis.DirectionHistoryError != "" {
+		sb.WriteString("Direction history: unavailable (")
+		sb.WriteString(truncateText(analysis.DirectionHistoryError, 360))
 		sb.WriteString(")\n")
 	}
 	if len(analysis.Heatmap) > 0 {
@@ -374,44 +432,6 @@ func FormatAnalysisForAI(analysis *MarketAnalysis) string {
 		sb.WriteString(")\n")
 	}
 	return sb.String()
-}
-
-func FormatSignalLabMarkdown(raw json.RawMessage) string {
-	data, ok := decodeVergexDataObject(raw)
-	if !ok {
-		return fallbackJSONBlock(raw, 2200)
-	}
-
-	var sb strings.Builder
-	writeScalarSummary(&sb, data, []string{"symbol", "marketType", "band", "bias", "confidence", "compositeZ", "score"})
-
-	dimensions := objectArray(data, "dimensions")
-	if len(dimensions) == 0 {
-		return withFallbackIfEmpty(sb.String(), raw)
-	}
-
-	sb.WriteString("| Family | Signal | Direction | Strength | Percentile | Detail |\n")
-	sb.WriteString("| --- | --- | --- | --- | ---: | --- |\n")
-	limit := minInt(len(dimensions), 8)
-	for _, row := range dimensions[:limit] {
-		sb.WriteString("| ")
-		sb.WriteString(markdownCell(firstString(row, "family")))
-		sb.WriteString(" | ")
-		sb.WriteString(markdownCell(firstString(row, "label", "key")))
-		sb.WriteString(" | ")
-		sb.WriteString(markdownCell(firstString(row, "direction")))
-		sb.WriteString(" | ")
-		sb.WriteString(markdownCell(firstString(row, "strength")))
-		sb.WriteString(" | ")
-		sb.WriteString(markdownCell(formatOptionalFloat(row, "percentile")))
-		sb.WriteString(" | ")
-		sb.WriteString(markdownCell(truncateText(firstString(row, "detail", "what"), 220)))
-		sb.WriteString(" |\n")
-	}
-	if len(dimensions) > limit {
-		sb.WriteString(fmt.Sprintf("- Additional dimensions omitted: %d\n", len(dimensions)-limit))
-	}
-	return withFallbackIfEmpty(sb.String(), raw)
 }
 
 func FormatHeatmapMarkdown(raw json.RawMessage) string {
@@ -741,33 +761,37 @@ func truncateText(text string, maxBytes int) string {
 	return text[:maxBytes] + "...<truncated>"
 }
 
-func parseRankItem(obj map[string]any, fallbackRank int) (SignalRankItem, bool) {
+func parseRankItem(obj map[string]any, fallbackRank int) (DirectionChangeItem, bool) {
 	symbol := firstString(obj, "symbol", "ticker", "base", "coin", "asset", "market", "name")
 	if symbol == "" {
 		symbol = nestedMarketString(obj, "symbol", "ticker", "base", "coin", "asset", "name")
 	}
 	if symbol == "" {
-		return SignalRankItem{}, false
+		return DirectionChangeItem{}, false
 	}
 	raw, _ := json.Marshal(obj)
 	rank := firstInt(obj, "rank", "ranking", "position")
 	if rank <= 0 {
 		rank = fallbackRank
 	}
-	score := firstFloat(obj, "compositeZ", "composite_z", "score", "rank_score", "z", "value")
-	confidence := firstFloat(obj, "confidence", "conf", "signalConfidence", "signal_confidence")
+	score := firstFloat(obj, "directionScore", "direction_score", "score")
 	marketType := firstString(obj, "marketType", "market_type", "venue")
 	if marketType == "" {
 		marketType = nestedMarketString(obj, "marketType", "market_type", "venue", "type")
 	}
-	item := SignalRankItem{
-		Rank:       rank,
-		Symbol:     QuerySymbol(symbol),
-		MarketType: marketType,
-		Bias:       firstString(obj, "bias", "direction", "side", "signal"),
-		Confidence: confidence,
-		Score:      score,
-		Raw:        raw,
+	item := DirectionChangeItem{
+		Rank:         rank,
+		Symbol:       QuerySymbol(symbol),
+		APISymbol:    symbol,
+		MarketType:   marketType,
+		Bias:         firstString(obj, "bias", "direction", "side", "signal"),
+		Score:        score,
+		BullishCount: firstInt(obj, "bullishCount"),
+		BearishCount: firstInt(obj, "bearishCount"),
+		NeutralCount: firstInt(obj, "neutralCount"),
+		OIRank:       firstInt(obj, "oiRank"),
+		MarkPrice:    firstFloat(obj, "markPrice"),
+		Raw:          raw,
 	}
 	if item.Symbol != "" {
 		item.Category = hyperliquid.XYZCategory(item.Symbol)

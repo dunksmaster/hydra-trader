@@ -1,13 +1,59 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  getWalletErrorMessage,
+  getWalletProviderName,
   getWalletChainIdHex,
   signHyperliquidUserAction,
+  subscribeWalletProviders,
   type WalletProvider,
 } from './hyperliquidWallet'
 
 const SIGNATURE = `0x${'11'.repeat(64)}01`
 
 describe('Hyperliquid wallet signing chain', () => {
+  it('discovers wallets announced through EIP-6963', () => {
+    const provider: WalletProvider = { request: vi.fn() }
+    const announce = () =>
+      window.dispatchEvent(
+        new CustomEvent('eip6963:announceProvider', {
+          detail: { info: { name: 'Test Wallet' }, provider },
+        })
+      )
+    window.addEventListener('eip6963:requestProvider', announce)
+    const updates: WalletProvider[][] = []
+
+    const unsubscribe = subscribeWalletProviders((providers) =>
+      updates.push(providers)
+    )
+
+    expect(updates.at(-1)).toContain(provider)
+    expect(getWalletProviderName(provider)).toBe('Test Wallet')
+    unsubscribe()
+    window.removeEventListener('eip6963:requestProvider', announce)
+  })
+
+  it('labels injected wallet providers without mistaking Rabby for MetaMask', () => {
+    expect(
+      getWalletProviderName({
+        request: vi.fn(),
+        isRabby: true,
+        isMetaMask: true,
+      })
+    ).toBe('Rabby')
+    expect(getWalletProviderName({ request: vi.fn(), isOkxWallet: true })).toBe(
+      'OKX Wallet'
+    )
+  })
+
+  it('preserves messages from EIP-1193 provider error objects', () => {
+    expect(
+      getWalletErrorMessage(
+        { code: 4001, message: 'Request rejected by wallet' },
+        'Wallet connection failed'
+      )
+    ).toBe('Request rejected by wallet')
+  })
+
   it('uses the active wallet chain for both the action and EIP-712 domain', async () => {
     const request = vi.fn(async ({ method }: { method: string }) => {
       if (method === 'eth_chainId') return '0xA4B1'

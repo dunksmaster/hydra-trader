@@ -57,8 +57,14 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actio
 		return at.executeCloseLongWithRecord(decision, actionRecord)
 	case "close_short":
 		return at.executeCloseShortWithRecord(decision, actionRecord)
-	case "hold", "wait":
-		// No execution needed, just record
+	case "hold":
+		if at.usesSignalManagedExit() {
+			if err := at.trader.CancelTakeProfitOrders(decision.Symbol); err != nil {
+				logger.Infof("  ⚠ Failed to remove fixed take profit for signal-managed hold: %v", err)
+			}
+		}
+		return nil
+	case "wait":
 		return nil
 	default:
 		return fmt.Errorf("unknown action: %s", decision.Action)
@@ -87,10 +93,13 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		}
 	}
 
-	// Get current price
+	// Get current price and reject invalid protection before opening exposure.
 	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
 	if err != nil {
 		return fmt.Errorf("failed to get market data for %s: %w", decision.Symbol, err)
+	}
+	if err := validateProtectionPrices(decision.Action, marketData.CurrentPrice, decision.StopLoss, decision.TakeProfit, at.usesSignalManagedExit()); err != nil {
+		return err
 	}
 
 	// Get balance (needed for multiple checks)
@@ -165,7 +174,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 
 	at.applyDefaultProtectivePrices(decision, marketData.CurrentPrice)
 	if err := at.placeProtectiveOrders(decision.Symbol, "LONG", quantity, decision.StopLoss, decision.TakeProfit); err != nil {
-		at.logErrorf("🛡️ Protective orders failed after opening %s long: %v — position is live, set stops manually", decision.Symbol, err)
+		at.logErrorf("🛡️ Protective orders failed after opening %s long: %v — position is live, protectNakedPositions will retry", decision.Symbol, err)
 	}
 
 	return nil
@@ -193,10 +202,13 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		}
 	}
 
-	// Get current price
+	// Get current price and reject invalid protection before opening exposure.
 	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
 	if err != nil {
 		return fmt.Errorf("failed to get market data for %s: %w", decision.Symbol, err)
+	}
+	if err := validateProtectionPrices(decision.Action, marketData.CurrentPrice, decision.StopLoss, decision.TakeProfit, at.usesSignalManagedExit()); err != nil {
+		return err
 	}
 
 	// Get balance (needed for multiple checks)
@@ -271,7 +283,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 
 	at.applyDefaultProtectivePrices(decision, marketData.CurrentPrice)
 	if err := at.placeProtectiveOrders(decision.Symbol, "SHORT", quantity, decision.StopLoss, decision.TakeProfit); err != nil {
-		at.logErrorf("🛡️ Protective orders failed after opening %s short: %v — position is live, set stops manually", decision.Symbol, err)
+		at.logErrorf("🛡️ Protective orders failed after opening %s short: %v — position is live, protectNakedPositions will retry", decision.Symbol, err)
 	}
 
 	return nil

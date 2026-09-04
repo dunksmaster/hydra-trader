@@ -39,6 +39,7 @@ export interface Exchange {
   hyperliquidWalletAddr?: string
   hyperliquidUnifiedAccount?: boolean
   hyperliquidBuilderApproved?: boolean
+  hyperliquidAgentAddress?: string
   has_hyperliquid_secret?: boolean
   // Aster specific
   asterUser?: string

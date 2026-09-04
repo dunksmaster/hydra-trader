@@ -10,10 +10,6 @@ import (
 )
 
 const (
-	// Anti-churn open caps: at most a couple of new positions per hour/cycle.
-	autopilotMaxOpensPerHour  = 3
-	autopilotMaxOpensPerCycle = 2
-
 	// Exit gates, validated by decision replay (2026-07-26, 4154 cycles,
 	// 3-fold robustness): gates beat no-gates by 34 pts and the old rigid
 	// 4h/8h by 16 pts of worst-fold score; the searched optimum sits at these
@@ -23,6 +19,8 @@ const (
 	// Re-entering a just-closed symbol was a consistent loss source: the
 	// replay's top-20 configs cluster tightly at ~4h.
 	autopilotReentryCooldown      = 4 * time.Hour
+	autopilotMaxOpensPerHour      = 3
+	autopilotMaxOpensPerCycle     = 2
 	earlyCloseStopLossBypassPct   = -3.0
 	earlyCloseTakeProfitBypassPct = 8.0
 	noiseCloseLossFloorPct        = -2.0
@@ -121,14 +119,16 @@ func (at *AutoTrader) openThrottleReason(decision kernel.Decision, ctx *kernel.C
 		return fmt.Sprintf("trade throttle: %d open order already executed in the last hour; max is %d", openCount, autopilotMaxOpensPerHour)
 	}
 
-	cooldown := at.reentryCooldown()
-	if order := at.findRecentCloseOrder(symbol, time.Now().Add(-cooldown)); order != nil {
-		age := time.Since(time.UnixMilli(order.CreatedAt))
-		remaining := cooldown - age
-		if remaining < 0 {
-			remaining = 0
+	if !at.usesVergexSignalPolicy() {
+		cooldown := at.reentryCooldown()
+		if order := at.findRecentCloseOrder(symbol, time.Now().Add(-cooldown)); order != nil {
+			age := time.Since(time.UnixMilli(order.CreatedAt))
+			remaining := cooldown - age
+			if remaining < 0 {
+				remaining = 0
+			}
+			return fmt.Sprintf("trade throttle: %s was closed %s ago; wait %s before re-entry", symbol, roundDuration(age), roundDuration(remaining))
 		}
-		return fmt.Sprintf("trade throttle: %s was closed %s ago; wait %s before re-entry", symbol, roundDuration(age), roundDuration(remaining))
 	}
 
 	return ""
@@ -181,6 +181,11 @@ func (at *AutoTrader) blockAICloseOnLoss() bool {
 }
 
 func (at *AutoTrader) closeThrottleReason(decision kernel.Decision, ctx *kernel.Context) string {
+	// Vergex positions are closed by the direction state machine. A changed or
+	// vanished board signal must exit immediately, independent of hold duration.
+	if at.usesVergexSignalPolicy() {
+		return ""
+	}
 	symbol := normalizedDecisionSymbol(decision.Symbol)
 	side := closeActionSide(decision.Action)
 	if symbol == "" || side == "" {

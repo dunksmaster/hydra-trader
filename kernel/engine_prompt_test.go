@@ -106,3 +106,13 @@ func containsCJK(text string) bool {
 	}
 	return false
 }
+
+func TestLegacyVergexFieldsDoNotSelectSignalManagedPrompt(t *testing.T) {
+	cfg := store.GetDefaultStrategyConfig("en")
+	cfg.CoinSource.SourceType = "claw402"
+	cfg.CoinSource.VergexLimit = 5
+	cfg.CoinSource.VergexMarketType = "all"
+	if NewStrategyEngine(&cfg).usesVergexSignalPrompt() {
+		t.Fatal("legacy Vergex fields must not select the signal-managed prompt")
+	}
+}
