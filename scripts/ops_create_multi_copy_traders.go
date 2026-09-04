@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	userID          = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
-	templateTrader  = "8cc80c16_08ab3fcb-8486-45cf-bd27-0ad35443ff61_openai_1787127468"
-	leader2         = "0xb8eb97eaed8367079894d2f1bed69bd220ec1dd5" // ETH-focused, ~4.5 trades/day
-	leader3         = "0xf29c6bc1147a841519b382459a6d7a373c6b9971" // HYPE-focused, distinct from BTC/ETH leaders
+	userID         = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
+	templateTrader = "8cc80c16_08ab3fcb-8486-45cf-bd27-0ad35443ff61_openai_1787127468"
+	leader2        = "0xb8eb97eaed8367079894d2f1bed69bd220ec1dd5" // ETH-focused, ~4.5 trades/day
+	leader3        = "0xf29c6bc1147a841519b382459a6d7a373c6b9971" // HYPE-focused, distinct from BTC/ETH leaders
 )
 
 type botSpec struct {

@@ -5,8 +5,8 @@ type TradeEvent struct {
 	TraderID     string
 	ExchangeType string
 	Symbol       string
-	Side         string  // LONG or SHORT
-	Action       string  // open_long, open_short, close_long, close_short
+	Side         string // LONG or SHORT
+	Action       string // open_long, open_short, close_long, close_short
 	Quantity     float64
 	Price        float64
 	RealizedPnL  float64

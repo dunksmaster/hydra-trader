@@ -23,8 +23,8 @@ func TestIsBitgetClassicBlocked(t *testing.T) {
 func TestUTAOrderAction(t *testing.T) {
 	tests := []struct {
 		name, side, tradeSide, holdSide, posSide, want string
-		execPnl                                       float64
-		wantOK                                        bool
+		execPnl                                        float64
+		wantOK                                         bool
 	}{
 		{"open long", "buy", "open", "", "", "open_long", 0, true},
 		{"open short", "sell", "open", "", "", "open_short", 0, true},

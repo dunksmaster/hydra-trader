@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	userID   = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
-	traderID = "8cc80c16_08ab3fcb-8486-45cf-bd27-0ad35443ff61_claw402_1786649332"
+	userID              = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
+	traderID            = "8cc80c16_08ab3fcb-8486-45cf-bd27-0ad35443ff61_claw402_1786649332"
 	autopilotStrategyID = "2e50a1e7-cb16-4d0f-8ed7-c8ea6cda3ad3"
 	cloneName           = "Market Test - BigG Mar 2026"
 )

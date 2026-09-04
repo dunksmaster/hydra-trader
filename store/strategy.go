@@ -908,16 +908,16 @@ type CopyStrategyConfig struct {
 	MinLeaderFillUSD     float64  `json:"min_leader_fill_usd"`
 	DryRun               bool     `json:"dry_run"`
 	Inverse              bool     `json:"inverse"`
-	OverflowEnabled          bool     `json:"overflow_enabled"`
-	OverflowTraderID         string   `json:"overflow_trader_id"`
-	OverflowOnSkip           []string `json:"overflow_on_skip"`
-	OverflowNotionalUSD      float64  `json:"overflow_notional_usd"`
-	OverflowMaxPositions     int      `json:"overflow_max_positions"`
-	OverflowParallel         bool     `json:"overflow_parallel"` // mirror every HL open on overflow venue too
-	CopyLayer              int      `json:"copy_layer"`   // 1 (priority), 2 (fill free slots), or 3 (paused)
-	CopyPaused             bool     `json:"copy_paused"`  // when true, skip all new opens (closes still work)
-	LossStreak             int      `json:"loss_streak"`  // consecutive losing copy closes (net PnL <= 0)
-	PauseLossStreak        int      `json:"pause_loss_streak"` // auto-pause new opens after N losses in a row (0 = off)
+	OverflowEnabled      bool     `json:"overflow_enabled"`
+	OverflowTraderID     string   `json:"overflow_trader_id"`
+	OverflowOnSkip       []string `json:"overflow_on_skip"`
+	OverflowNotionalUSD  float64  `json:"overflow_notional_usd"`
+	OverflowMaxPositions int      `json:"overflow_max_positions"`
+	OverflowParallel     bool     `json:"overflow_parallel"` // mirror every HL open on overflow venue too
+	CopyLayer            int      `json:"copy_layer"`        // 1 (priority), 2 (fill free slots), or 3 (paused)
+	CopyPaused           bool     `json:"copy_paused"`       // when true, skip all new opens (closes still work)
+	LossStreak           int      `json:"loss_streak"`       // consecutive losing copy closes (net PnL <= 0)
+	PauseLossStreak      int      `json:"pause_loss_streak"` // auto-pause new opens after N losses in a row (0 = off)
 }
 
 // Normalize applies defaults and clamps copy-trading config fields.

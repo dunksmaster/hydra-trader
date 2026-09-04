@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	userID       = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
-	machiName    = "machibigbrother"
-	leaderAddr   = "0x020ca66c30bec2c4fe3861a94e4db4a498a35872"
+	userID     = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
+	machiName  = "machibigbrother"
+	leaderAddr = "0x020ca66c30bec2c4fe3861a94e4db4a498a35872"
 )
 
 func main() {

@@ -12,8 +12,8 @@ import (
 // and a non-streamed call has to wait for the entire reasoning+answer before
 // headers complete — matching the 68-97s calls and "awaiting headers" timeouts.
 const (
-	nvidiaReasoningBudget     = 2048
-	nvidiaThinkingTimeoutMin  = 300 * time.Second
+	nvidiaReasoningBudget    = 2048
+	nvidiaThinkingTimeoutMin = 300 * time.Second
 )
 
 // nvidiaThinkingTimeout is the HTTP client timeout for NVIDIA thinking models.

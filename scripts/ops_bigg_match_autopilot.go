@@ -34,7 +34,7 @@ func main() {
 	}
 	c := &client{token: token}
 
-	ap, _ := c.getJSON("/api/strategies/"+apStrategy).(map[string]any)
+	ap, _ := c.getJSON("/api/strategies/" + apStrategy).(map[string]any)
 	apCfg, _ := ap["config"].(map[string]any)
 	apAI, _ := apCfg["ai_config"].(map[string]any)
 	if apAI == nil {

@@ -72,14 +72,14 @@ func main() {
 		"config": map[string]any{
 			"ai_config": map[string]any{
 				"coin_source": map[string]any{
-					"source_type":            "hyper_rank",
-					"hyper_rank_category":    "crypto",
-					"hyper_rank_direction":   "volume",
-					"hyper_rank_limit":       5,
-					"vergex_market_type":     "",
-					"vergex_chain":           "",
-					"vergex_limit":           0,
-					"vergex_liq_band":        "",
+					"source_type":          "hyper_rank",
+					"hyper_rank_category":  "crypto",
+					"hyper_rank_direction": "volume",
+					"hyper_rank_limit":     5,
+					"vergex_market_type":   "",
+					"vergex_chain":         "",
+					"vergex_limit":         0,
+					"vergex_liq_band":      "",
 				},
 				"indicators": map[string]any{
 					"enable_quant_data": false,

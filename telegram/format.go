@@ -1084,10 +1084,11 @@ func formatPortfolioFooterOneLine(acct AccountSnapshot) string {
 }
 
 // formatTradeAlertRich renders the classic order notification:
-//   🔵 NOFX Autopilot
-//   Copy trade bot: NOFX Autopilot
-//   OPEN LONG  BTCUSDT
-//   FILLED — 0.0100 @ $95000 · 10x
+//
+//	🔵 NOFX Autopilot
+//	Copy trade bot: NOFX Autopilot
+//	OPEN LONG  BTCUSDT
+//	FILLED — 0.0100 @ $95000 · 10x
 func formatTradeAlertRich(st *store.Store, e events.TradeEvent, lang string, footer *AccountSnapshot) string {
 	traderName, _ := lookupTraderMeta(st, e.TraderID)
 	if traderName == "" {

@@ -28,19 +28,19 @@ type copyBotStats struct {
 }
 
 type copyBotRow struct {
-	TraderID     string                 `json:"trader_id"`
-	TraderName   string                 `json:"trader_name"`
-	Exchange     string                 `json:"exchange"`
-	ExchangeID   string                 `json:"exchange_id"`
-	IsRunning    bool                   `json:"is_running"`
-	StrategyID   string                 `json:"strategy_id"`
-	StrategyName string                 `json:"strategy_name"`
-	StrategyType string                 `json:"strategy_type"`
+	TraderID     string                    `json:"trader_id"`
+	TraderName   string                    `json:"trader_name"`
+	Exchange     string                    `json:"exchange"`
+	ExchangeID   string                    `json:"exchange_id"`
+	IsRunning    bool                      `json:"is_running"`
+	StrategyID   string                    `json:"strategy_id"`
+	StrategyName string                    `json:"strategy_name"`
+	StrategyType string                    `json:"strategy_type"`
 	CopyConfig   *store.CopyStrategyConfig `json:"copy_config,omitempty"`
-	Account      map[string]interface{} `json:"account,omitempty"`
-	Positions    []copyBotPosition      `json:"positions"`
-	Stats        *copyBotStats          `json:"stats,omitempty"`
-	LastDecision string                 `json:"last_decision,omitempty"`
+	Account      map[string]interface{}    `json:"account,omitempty"`
+	Positions    []copyBotPosition         `json:"positions"`
+	Stats        *copyBotStats             `json:"stats,omitempty"`
+	LastDecision string                    `json:"last_decision,omitempty"`
 }
 
 // handleCopyBots returns an aggregated view of all copy-trading bots for the user.

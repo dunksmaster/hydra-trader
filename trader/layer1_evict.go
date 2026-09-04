@@ -11,8 +11,8 @@ import (
 
 	"nofx/events"
 	"nofx/kernel"
-	hlprovider "nofx/provider/hyperliquid"
 	"nofx/market"
+	hlprovider "nofx/provider/hyperliquid"
 	"nofx/store"
 )
 

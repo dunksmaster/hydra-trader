@@ -15,22 +15,22 @@ import (
 
 // TelegramConfig stores the Telegram bot binding (single row, always ID=1)
 type TelegramConfig struct {
-	ID        uint      `gorm:"primaryKey"`
-	BotToken  crypto.EncryptedString `gorm:"column:bot_token"`
-	ChatID    int64     `gorm:"column:chat_id"`
-	Username  string    `gorm:"column:username"` // @username for display
-	BoundAt   time.Time `gorm:"column:bound_at"`
-	ModelID   string    `gorm:"column:model_id;default:''"` // AI model used for Telegram replies
-	Language  string    `gorm:"column:language;default:''"` // "zh" or "en"; empty = not chosen yet
-	BindCode          string  `gorm:"column:bind_code;default:''"`           // One-time code required to bind via /start
-	NotifyEnabled     bool    `gorm:"column:notify_enabled;default:true"`    // Push trade alerts to bound chat
-	DigestEnabled     bool    `gorm:"column:digest_enabled;default:true"`    // Daily snapshot + swing alerts
-	PnlSwingThreshold float64 `gorm:"column:pnl_swing_threshold;default:5"`  // uPnL move threshold (USD)
-	SelectedTraderID     string `gorm:"column:selected_trader_id;default:''"`      // "" or "*" = all; else one trader_id
-	FavoriteTraderIDs    string `gorm:"column:favorite_trader_ids;default:''"`     // comma-separated trader_id list (Telegram /fav)
-	LastDailyDigestDate  string `gorm:"column:last_daily_digest_date;default:''"` // UTC date YYYY-MM-DD last snapshot was sent
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                  uint                   `gorm:"primaryKey"`
+	BotToken            crypto.EncryptedString `gorm:"column:bot_token"`
+	ChatID              int64                  `gorm:"column:chat_id"`
+	Username            string                 `gorm:"column:username"` // @username for display
+	BoundAt             time.Time              `gorm:"column:bound_at"`
+	ModelID             string                 `gorm:"column:model_id;default:''"`               // AI model used for Telegram replies
+	Language            string                 `gorm:"column:language;default:''"`               // "zh" or "en"; empty = not chosen yet
+	BindCode            string                 `gorm:"column:bind_code;default:''"`              // One-time code required to bind via /start
+	NotifyEnabled       bool                   `gorm:"column:notify_enabled;default:true"`       // Push trade alerts to bound chat
+	DigestEnabled       bool                   `gorm:"column:digest_enabled;default:true"`       // Daily snapshot + swing alerts
+	PnlSwingThreshold   float64                `gorm:"column:pnl_swing_threshold;default:5"`     // uPnL move threshold (USD)
+	SelectedTraderID    string                 `gorm:"column:selected_trader_id;default:''"`     // "" or "*" = all; else one trader_id
+	FavoriteTraderIDs   string                 `gorm:"column:favorite_trader_ids;default:''"`    // comma-separated trader_id list (Telegram /fav)
+	LastDailyDigestDate string                 `gorm:"column:last_daily_digest_date;default:''"` // UTC date YYYY-MM-DD last snapshot was sent
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // String returns a safe string representation of TelegramConfig with the token masked.
@@ -45,18 +45,18 @@ func (tc TelegramConfig) String() string {
 
 // TelegramConfigStore defines the interface for Telegram bot binding operations
 type TelegramConfigStore interface {
-	Get() (*TelegramConfig, error)                    // Get current config (may not exist)
-	SaveToken(botToken string) error                  // Save bot token only (Web UI sets this)
-	Save(botToken, modelID string) error              // Save bot token + selected AI model
+	Get() (*TelegramConfig, error)                                 // Get current config (may not exist)
+	SaveToken(botToken string) error                               // Save bot token only (Web UI sets this)
+	Save(botToken, modelID string) error                           // Save bot token + selected AI model
 	BindUser(chatID int64, username string, bindCode string) error // Called on first /start with dashboard code
-	IsBound() (bool, error)                           // Check if any user is bound
-	GetBoundChatID() (int64, error)                   // Get bound chat ID (0 if not bound)
-	EnsureBindCode() (string, error)                  // Generate bind code when unbound
-	Unbind() error                                    // Remove binding
-	SetLanguage(lang string) error                    // Set UI language ("en" or "zh")
-	GetLanguage() string                              // Get UI language; returns "en" if not set
-	SetNotifyEnabled(enabled bool) error              // Enable/disable proactive trade alerts
-	IsNotifyEnabled() bool                            // Whether trade alerts are enabled (default true)
+	IsBound() (bool, error)                                        // Check if any user is bound
+	GetBoundChatID() (int64, error)                                // Get bound chat ID (0 if not bound)
+	EnsureBindCode() (string, error)                               // Generate bind code when unbound
+	Unbind() error                                                 // Remove binding
+	SetLanguage(lang string) error                                 // Set UI language ("en" or "zh")
+	GetLanguage() string                                           // Get UI language; returns "en" if not set
+	SetNotifyEnabled(enabled bool) error                           // Enable/disable proactive trade alerts
+	IsNotifyEnabled() bool                                         // Whether trade alerts are enabled (default true)
 	SetDigestEnabled(enabled bool) error
 	IsDigestEnabled() bool
 	GetPnlSwingThreshold() float64

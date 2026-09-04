@@ -115,7 +115,7 @@ type Context struct {
 	Timeframes         []string                           `json:"-"`
 	// MarketDataExchange selects which exchange CoinAnk uses for OHLCV (e.g.
 	// "bitget" for Bitget traders). Empty defaults to binance in fetchMarketData.
-	MarketDataExchange string                             `json:"-"`
+	MarketDataExchange string `json:"-"`
 }
 
 // Decision AI trading decision

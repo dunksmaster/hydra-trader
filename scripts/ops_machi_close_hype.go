@@ -1,4 +1,4 @@
-﻿//go:build ignore
+//go:build ignore
 
 // Close machibigbrother HYPE short, re-apply watch-only, restart fills loop.
 package main

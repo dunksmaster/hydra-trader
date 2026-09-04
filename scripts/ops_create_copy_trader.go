@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	userID           = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
-	autopilotTrader  = "8cc80c16_08ab3fcb-8486-45cf-bd27-0ad35443ff61_claw402_1786632502"
-	leaderAddress    = "0x6859da14835424957a1e6b397d8026b1d9ff7e1e"
-	strategyName     = "HL Copy 0x6859"
-	traderName       = "Autopilot Copy"
+	userID          = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
+	autopilotTrader = "8cc80c16_08ab3fcb-8486-45cf-bd27-0ad35443ff61_claw402_1786632502"
+	leaderAddress   = "0x6859da14835424957a1e6b397d8026b1d9ff7e1e"
+	strategyName    = "HL Copy 0x6859"
+	traderName      = "Autopilot Copy"
 )
 
 func main() {
@@ -110,17 +110,17 @@ func main() {
 				"strategy_type": "copy_trading",
 				"language":      "en",
 				"copy_config": map[string]any{
-					"leader_address":    leaderAddress,
-					"size_mode":         "fixed_notional",
-					"notional_usd":      15,
-					"min_notional_usd":  12,
-					"max_notional_pct":  40,
-					"max_leverage":      5,
-					"exit_mode":         "leader_plus_stop",
-					"safety_stop_pct":   15,
-					"symbol_blocklist":  []string{"xyz:"},
-					"dry_run":           true,
-					"inverse":           false,
+					"leader_address":   leaderAddress,
+					"size_mode":        "fixed_notional",
+					"notional_usd":     15,
+					"min_notional_usd": 12,
+					"max_notional_pct": 40,
+					"max_leverage":     5,
+					"exit_mode":        "leader_plus_stop",
+					"safety_stop_pct":  15,
+					"symbol_blocklist": []string{"xyz:"},
+					"dry_run":          true,
+					"inverse":          false,
 				},
 			},
 		})

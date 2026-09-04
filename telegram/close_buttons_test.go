@@ -74,7 +74,7 @@ func TestIsQuickCommandOrderAlias(t *testing.T) {
 		t.Fatal("/close_<token> should be a quick command")
 	}
 	token := mintCloseToken("trader-abc", "BTCUSDT", "long")
-	if !isQuickCommand("/" + strings.TrimPrefix(token, closeTokenPrefix)) && !isQuickCommand(closeCommand(strings.TrimPrefix(token, closeTokenPrefix))) {
+	if !isQuickCommand("/"+strings.TrimPrefix(token, closeTokenPrefix)) && !isQuickCommand(closeCommand(strings.TrimPrefix(token, closeTokenPrefix))) {
 		// isQuickCommand expects /close_<id>
 		id := strings.TrimPrefix(token, closeTokenPrefix)
 		if !isQuickCommand("/close_" + id) {

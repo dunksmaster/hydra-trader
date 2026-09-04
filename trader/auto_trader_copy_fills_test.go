@@ -50,15 +50,15 @@ func (m *copyCloseMockTrader) CloseLong(string, float64) (map[string]interface{}
 func (m *copyCloseMockTrader) CloseShort(string, float64) (map[string]interface{}, error) {
 	return nil, nil
 }
-func (m *copyCloseMockTrader) SetLeverage(string, int) error                          { return nil }
-func (m *copyCloseMockTrader) SetMarginMode(string, bool) error                       { return nil }
-func (m *copyCloseMockTrader) GetMarketPrice(string) (float64, error)                 { return 0, nil }
-func (m *copyCloseMockTrader) SetStopLoss(string, string, float64, float64) error     { return nil }
-func (m *copyCloseMockTrader) SetTakeProfit(string, string, float64, float64) error   { return nil }
-func (m *copyCloseMockTrader) CancelStopLossOrders(string) error                      { return nil }
-func (m *copyCloseMockTrader) CancelTakeProfitOrders(string) error                    { return nil }
-func (m *copyCloseMockTrader) CancelAllOrders(string) error                           { return nil }
-func (m *copyCloseMockTrader) CancelStopOrders(string) error                          { return nil }
+func (m *copyCloseMockTrader) SetLeverage(string, int) error                        { return nil }
+func (m *copyCloseMockTrader) SetMarginMode(string, bool) error                     { return nil }
+func (m *copyCloseMockTrader) GetMarketPrice(string) (float64, error)               { return 0, nil }
+func (m *copyCloseMockTrader) SetStopLoss(string, string, float64, float64) error   { return nil }
+func (m *copyCloseMockTrader) SetTakeProfit(string, string, float64, float64) error { return nil }
+func (m *copyCloseMockTrader) CancelStopLossOrders(string) error                    { return nil }
+func (m *copyCloseMockTrader) CancelTakeProfitOrders(string) error                  { return nil }
+func (m *copyCloseMockTrader) CancelAllOrders(string) error                         { return nil }
+func (m *copyCloseMockTrader) CancelStopOrders(string) error                        { return nil }
 func (m *copyCloseMockTrader) GetOrderStatus(string, string) (map[string]interface{}, error) {
 	return nil, nil
 }

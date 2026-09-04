@@ -66,7 +66,7 @@ func main() {
 			continue
 		}
 		id, _ := s["id"].(string)
-		detail, _ := get("/api/strategies/"+id).(map[string]any)
+		detail, _ := get("/api/strategies/" + id).(map[string]any)
 		cfg, _ := detail["config"].(map[string]any)
 		ai, _ := cfg["ai_config"].(map[string]any)
 		cs, _ := ai["coin_source"].(map[string]any)

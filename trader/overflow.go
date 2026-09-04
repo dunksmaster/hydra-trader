@@ -11,10 +11,11 @@ import (
 	"nofx/events"
 	"nofx/kernel"
 	"nofx/market"
-	"nofx/store"
 	hlprovider "nofx/provider/hyperliquid"
+	"nofx/store"
 	"nofx/trader/bitget"
 )
+
 var (
 	overflowLookupMu sync.RWMutex
 	overflowLookup   func(string) *AutoTrader
@@ -524,8 +525,8 @@ func (at *AutoTrader) emitOverflowSkip(symbol, action, reason string) {
 }
 
 const (
-	liquidationMarginUsedPct  = 80.0
-	liquidationDistancePct    = 8.0
+	liquidationMarginUsedPct = 80.0
+	liquidationDistancePct   = 8.0
 )
 
 func (at *AutoTrader) maybeEmitLiquidationRisk() {

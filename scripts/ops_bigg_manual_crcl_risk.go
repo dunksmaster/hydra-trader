@@ -112,9 +112,9 @@ func main() {
 			"ai_config": map[string]any{
 				"risk_control": map[string]any{
 					"hard_stop_loss_margin_pct":   0,
-					"hard_take_profit_margin_pct":   0,
-					"max_positions":                 1,
-					"max_margin_usage":              0.3,
+					"hard_take_profit_margin_pct": 0,
+					"max_positions":               1,
+					"max_margin_usage":            0.3,
 				},
 			},
 		},

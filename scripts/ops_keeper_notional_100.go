@@ -91,7 +91,7 @@ func main() {
 		}
 		targets = append(targets, target{
 			name: name, id: firstStr(tr, "trader_id", "id"),
-			sid: firstStr(tr, "strategy_id"),
+			sid:     firstStr(tr, "strategy_id"),
 			running: fmt.Sprint(tr["is_running"]) == "true",
 		})
 	}

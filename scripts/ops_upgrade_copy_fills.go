@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	strategyID     = "00e95f8a-baf4-4d80-85fb-9ce5060e7fbb"
-	leaderAddress  = "0x66f889094739dbb7d20aa60f645acd88feba75a9"
-	ownerUserID    = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
+	strategyID    = "00e95f8a-baf4-4d80-85fb-9ce5060e7fbb"
+	leaderAddress = "0x66f889094739dbb7d20aa60f645acd88feba75a9"
+	ownerUserID   = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
 )
 
 func main() {

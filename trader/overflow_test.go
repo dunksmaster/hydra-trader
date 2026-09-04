@@ -264,4 +264,3 @@ func TestOverflowExchangeHeld(t *testing.T) {
 		t.Fatalf("wrong side should be flat, held=%v", held)
 	}
 }
-

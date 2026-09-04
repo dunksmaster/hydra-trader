@@ -22,12 +22,12 @@ const userID = "08ab3fcb-8486-45cf-bd27-0ad35443ff61"
 
 // Exact trader_name matches from /api/my-traders (Leviathan may include emoji).
 var stopExact = map[string]bool{
-	"Crypto BigG":     true,
-	"NOFX Autopilot":  true,
-	"Copy L4":         true,
-	"Grinder":         true,
-	"Money Printer":   false, // leave unless user asked — not in this stop list
-	"Alpha 6859":      false,
+	"Crypto BigG":    true,
+	"NOFX Autopilot": true,
+	"Copy L4":        true,
+	"Grinder":        true,
+	"Money Printer":  false, // leave unless user asked — not in this stop list
+	"Alpha 6859":     false,
 }
 
 func main() {
