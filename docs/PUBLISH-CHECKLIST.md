@@ -61,11 +61,17 @@ NOFX's design.
       higher-risk `pull_request_target`), and gates image pushes/secrets behind
       `github.event_name != 'pull_request'`, so fork PRs never get registry credentials
       or push rights.
-- [ ] **Uncommitted local changes need to be committed** — a large amount of real
-      application code (trader/, telegram/, api/, store/, kernel/, mcp/ core logic,
-      plus operational scripts) exists only in an uncommitted working tree, not in git
-      history. A public repo needs what's running and what's published to match.
-- [ ] **Decide what happens to `scripts/` ops tooling** — publish as-is with a
-      "not production-supported" note, or exclude from the public release.
-- [ ] **Confirm AGPL-3.0 stays the license**, and that the published `LICENSE` file and
-      README badge are accurate.
+- [x] **Uncommitted local changes committed** — all 277 files landed across 17 atomic,
+      build-verified commits plus a merge with upstream's own progress, on
+      `feat/copy-trading-and-fixes`: https://github.com/dunksmaster/hydra-trader/pull/1
+- [x] **`scripts/` ops tooling published as-is** with `scripts/README.md` stating
+      plainly it's not part of the deployed service and not held to the same testing
+      standard, kept for reference now that the project is no longer live-traded.
+- [x] **AGPL-3.0 confirmed as the license** — root `README.md` rewritten for this
+      fork's own identity, states the license and network-service clause explicitly.
+- [x] **gofmt clean** — 73 files with real formatting drift (not line-ending noise)
+      fixed and verified against the committed git blob.
+
+**Remaining, optional, not blocking:**
+- [ ] Merge PR #1 into `main`
+- [ ] Local paper-trading/backtest simulation (no live capital, reference only)
